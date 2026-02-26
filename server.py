@@ -617,9 +617,7 @@ def api_offers():
     return jsonify({"offers": offers})
 
 
-@app.route("/api/check_table", methods=["GET"])
-def api_check_table():
-    """Проверка доступа к Google Таблице: открыть в браузере для проверки связи."""
+def _check_table():
     try:
         offers_x = load_offers("Список офферов X")
         offers_y = load_offers("Список офферов Y")
@@ -635,6 +633,18 @@ def api_check_table():
             "message": "Нет доступа к таблице.",
             "error": str(e),
         }), 500
+
+
+@app.route("/api/check_table", methods=["GET"])
+def api_check_table():
+    """Проверка доступа к Google Таблице: открыть в браузере для проверки связи."""
+    return _check_table()
+
+
+@app.route("/check_table", methods=["GET"])
+def check_table_short():
+    """Короткий URL для проверки таблицы."""
+    return _check_table()
 
 
 @app.route("/api/orders", methods=["POST"])
