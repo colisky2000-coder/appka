@@ -1,0 +1,17 @@
+# Render Blueprint — один клик деплой из GitHub
+# Dashboard: New → Blueprint → подключи репо, выбери этот файл
+# После создания сервиса: Environment → заполни переменные (sync: false) → Save
+
+services:
+  - type: web
+    name: appka
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/check_table
+    envVars:
+      - key: GOOGLE_CREDENTIALS_JSON
+        sync: false
+      - key: BOT_TOKEN
+        sync: false
+      - key: SPREADSHEET_ID
+        sync: false
