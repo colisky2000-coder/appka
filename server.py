@@ -38,6 +38,8 @@ if _json_content:
     JSON_KEY_PATH = _tf.name
 else:
     JSON_KEY_PATH = _json_path
+    if not os.path.isfile(JSON_KEY_PATH) and os.environ.get("RAILWAY_ENVIRONMENT"):
+        print("[WARNING] JSON key file not found and GOOGLE_CREDENTIALS_JSON/BASE64 not set. Set GOOGLE_CREDENTIALS_BASE64 in Railway Variables.")
 
 _static = os.path.abspath(os.path.join(SCRIPT_DIR, "frontend", "dist"))
 if not os.path.isdir(_static):
@@ -626,6 +628,12 @@ def api_offers():
 
 
 def _check_table():
+    if not os.path.isfile(JSON_KEY_PATH):
+        return jsonify({
+            "ok": False,
+            "message": "Ключ Google не найден. В Railway добавь переменную GOOGLE_CREDENTIALS_BASE64 (скопируй из файла railway_base64.txt).",
+            "error": "missing_credentials",
+        }), 500
     try:
         offers_x = load_offers("Список офферов X")
         offers_y = load_offers("Список офферов Y")
