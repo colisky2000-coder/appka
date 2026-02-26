@@ -20,45 +20,29 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SCREENSHOT_CHANNEL_ID = -1003686883800
 
-# JSON ключ — файл рядом, либо GOOGLE_CREDENTIALS_JSON, либо GOOGLE_CREDENTIALS_BASE64 (для деплоя)
+# JSON ключ — зашит прямо в код (Railway не принимает переменные с ключом нормально)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_json_path = os.path.join(SCRIPT_DIR, "debet-485119-31d092561d4c.json")
-_json_content = None
-if os.environ.get("GOOGLE_CREDENTIALS_BASE64"):
-    try:
-        _json_content = base64.b64decode(os.environ["GOOGLE_CREDENTIALS_BASE64"]).decode("utf-8")
-    except Exception as e:
-        print(f"[WARNING] GOOGLE_CREDENTIALS_BASE64 decode error: {e}")
-elif os.environ.get("GOOGLE_CREDENTIALS_JSON"):
-    _json_content = os.environ["GOOGLE_CREDENTIALS_JSON"]
-if _json_content:
-    import tempfile
-    _tf = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
-    _tf.write(_json_content)
-    _tf.close()
-    JSON_KEY_PATH = _tf.name
-else:
-    # Обход: файл в репо (для Railway без переменных). Сначала google-credentials.json, потом обычный.
-    _file_in_repo = os.path.join(SCRIPT_DIR, "google-credentials.json")
-    if os.path.isfile(_file_in_repo):
-        JSON_KEY_PATH = _file_in_repo
-    else:
-        JSON_KEY_PATH = _json_path
-    # Если файл — заглушка (пустой ключ), попробовать второй путь (локально — debet-*.json)
-    if os.path.isfile(JSON_KEY_PATH):
-        try:
-            import json as _json
-            with open(JSON_KEY_PATH, "r", encoding="utf-8") as _f:
-                _data = _json.load(_f)
-            if not (_data.get("private_key") and _data.get("client_email")):
-                if os.environ.get("RAILWAY_ENVIRONMENT"):
-                    print("[WARNING] google-credentials.json — заглушка. Замените на реальный ключ или задайте GOOGLE_CREDENTIALS_BASE64.")
-                JSON_KEY_PATH = _json_path if os.path.isfile(_json_path) else None
-        except Exception:
-            pass
-    if not JSON_KEY_PATH or not os.path.isfile(JSON_KEY_PATH):
-        if os.environ.get("RAILWAY_ENVIRONMENT"):
-            print("[WARNING] No credentials: set GOOGLE_CREDENTIALS_BASE64 or replace google-credentials.json in repo.")
+
+_HARDCODED_CREDS = {
+    "type": "service_account",
+    "project_id": "debet-485119",
+    "private_key_id": "31d092561d4c01efbe4663a942322816d79f37ce",
+    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCmGosAumqHLQS3\nS3mt2mtfd9UGBdY/oBDqFgWicucVLjk3m0ln3Goqu4jdJczcjaq0YU2/JjHAqADE\n3uaY77zylF5qir0bHcat5Lpssc06eqzM+Kz+gnmUJNFkd3FGnFJ42DKAl7ARFfMj\n1I3w7yaoQ2ca5CEh2BHsVpYpa6KpjrXb3DvvcBCV5b5e7XPUZlHZCCgFhS2xVyR6\nZzF8NMiNdwKU+my9x6V6SpnlhxfMzmR1nYhjZqXCeWw1o1/5TRqNfRVFZaFm6v9O\nbIryQQQjvkTtV/lXroXgFhMLoSXxKf9CccKQIXoY+1gJe8tiA9NOj1nbtMtM4QAp\nFrgl6i4XAgMBAAECggEAQB93EezlOxHyBCCq9KahVNWZ8x1FvII6hWPDAReChfa2\nN/VGvUWl5qFHELiLAYnfIIt/zA8endU9lsLGGrxSIQON/2tX3aP9Exx9q4BoTe8V\nznshrY8JCFu+Sh6iKDQo0mYD+QiV+8KRfn+L3Ds2nTaIEyWGdN5I7QfwKEVZIkNK\nUlgstTWABgDnMb17mWWZd//lozwnuOjlr5R+iC51UwKcPPDVJh3JwUo9tjrTchPJ\n2i2ZvYbb8NxY56MuRfRT/v/zv5iEMznrwSUOMU5LmWV2N61wCLFYEvOrTWr15W1Z\nkBmGULtLhTaH5/yXXvldYsQz1FglIsxZ3U1ULCbC4QKBgQDPLZt6ufE80GGJSUie\npcM/vIt+D7g7A4NIcemUbqtxtM+75wbwgsh7RXkDqspZ2UGyqt7tCodrQnzhnUMM\nP5Eb7+MD0ckCkY3G7vMEf/zwSbdzpfa52ydpQSHTPNWxTsPFPD370D6UWYs+8lVr\nCvhl5pzqC1XJeMRE/y9D8aTNzQKBgQDNPwt1q38EYt8FA8mw+BDEgX882acdcxfU\ngAecCMAgUANIJCARGwhk8aGih2PiScSCYGyQ9D8toceVR9TfrJgntC/gUgP0Ey/6\n8UFFyPT7SXERA6t7FWKi/hyeqyeKpgJYpgtmJ6/GnjAOa5MEECBO99EuXIiuQoLX\nUSwfuCWncwKBgF9n/UWTA0iiHYh/OvX0F+nuBb7Ttl9Wyso9yvcTz9fZECDTzxpK\n39AEuim6KN0fc2W30lkOlDYMtD2hkhK94zEeU0ia/xoztTp7J2ZXGj/9coHLV8dW\n6NtLpywDw9SXFQhrKZAg4fCnG7ytFDDrKGCkxnXxKlxRRPERIs8DJIWxAoGANFzx\nP4QRU70lyNG+kze2j2u6Wnvs9sZ2PfCsAFL7MUM4kx8kTzjmW1qKMjz4brMDP3/6\nMsEdnTa5BIze8nHGH9sIm+JQv+RlSVBjprouRi3mesDE7xH1qD/MbW6dF/JihttV\n7SoS3kldWVB4oYC7vWncJEfXVx4A444CA9WnRaECgYA488Nu+qUuobiNCPHf5WYD\nX/EFsdBwvFGH/ldaviXNj0IqXKMgWUKQLxXy7wt96sqh9v9e7u+zpRsFHkUVPsgr\nyP969nTWL85BkWJZ+SEEsySxQtVVGB+PvjAmMFy/MWl+yf0i3FGwM+6qF5rtJ0zg\nVOsn/f7NJD6SLL3femZPcg==\n-----END PRIVATE KEY-----\n",
+    "client_email": "debet-73@debet-485119.iam.gserviceaccount.com",
+    "client_id": "105675091705065416589",
+    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+    "token_uri": "https://oauth2.googleapis.com/token",
+    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/debet-73%40debet-485119.iam.gserviceaccount.com",
+    "universe_domain": "googleapis.com"
+}
+
+import json as _json, tempfile as _tempfile
+_tf = _tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+_json.dump(_HARDCODED_CREDS, _tf)
+_tf.close()
+JSON_KEY_PATH = _tf.name
+print(f"[INFO] Google credentials loaded from hardcoded dict, tmp file: {JSON_KEY_PATH}")
 
 _static = os.path.abspath(os.path.join(SCRIPT_DIR, "frontend", "dist"))
 if not os.path.isdir(_static):
@@ -508,7 +492,6 @@ def save_user_order_sync(tid, username, card_name, payout, phone="", age="", ref
             if len(all_rows) < 1:
                 all_rows = [["Telegram ID", "Username", "Карта", "Время", "Выплата",
                              "Статус", "Телефон", "Возраст", "Ссылка"]]
-            # Обновить существующую строку если есть
             for i, r in enumerate(all_rows[1:], start=2):
                 if (r and len(r) >= 6 and str(r[0]) == str(tid) and
                         (r[2] or "").strip() == card_name.strip() and
@@ -519,7 +502,6 @@ def save_user_order_sync(tid, username, card_name, payout, phone="", age="", ref
                     if ts2 in user_orders_data_cache:
                         del user_orders_data_cache[ts2]
                     return i
-            # Новая строка
             next_row = len(all_rows) + 1
             ws.update(f"A{next_row}:I{next_row}", [row_data], value_input_option="USER_ENTERED")
             setup_status_dropdown(ws, next_row)
@@ -550,7 +532,6 @@ def referral_add_link(inviter_id, deep_link_code):
 # TELEGRAM BOT API — ОТПРАВКА В КАНАЛ
 # ============================================================
 def send_photo_to_channel(photo_bytes, caption, user_id, row_number, photo_type="screenshot"):
-    """Отправляет фото в канал модерации с кнопками одобрить/отклонить."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
     if photo_type == "screenshot":
         approve_cb = f"approve_screenshot_{user_id}_{row_number}"
@@ -581,7 +562,6 @@ def send_photo_to_channel(photo_bytes, caption, user_id, row_number, photo_type=
 
 
 def send_message_to_user(user_id, text, markup=None):
-    """Отправляет текстовое сообщение пользователю через Telegram Bot API."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     import json
     data = {
@@ -606,7 +586,6 @@ def send_message_to_user(user_id, text, markup=None):
 
 @app.route("/api/init", methods=["POST"])
 def api_init():
-    """Инициализация: получить настройки, проверить наличие заявок, возраст, телефон."""
     data = request.json or {}
     uid = str(data.get("user_id", ""))
     if not uid:
@@ -620,17 +599,16 @@ def api_init():
     return jsonify({
         "settings": settings,
         "has_orders": has_orders,
-        "age": age_from_sheet,  # "под18" / "над18" / None
+        "age": age_from_sheet,
         "phone": phone_from_sheet,
     })
 
 
 @app.route("/api/offers", methods=["POST"])
 def api_offers():
-    """Загрузить офферы по возрасту. Исключить уже оформленные если more=true."""
     data = request.json or {}
     uid = str(data.get("user_id", ""))
-    age = data.get("age", "over18")  # "under18" / "over18"
+    age = data.get("age", "over18")
     more = data.get("more", False)
 
     sheet_name = "Список офферов X" if age == "under18" else "Список офферов Y"
@@ -639,7 +617,10 @@ def api_offers():
     except Exception as e:
         print(f"[api/offers] Error: {e}")
         traceback.print_exc()
-        return jsonify({"offers": [], "error": "table_error", "message": "Нет доступа к таблице. Проверьте GOOGLE_CREDENTIALS_JSON и доступ к таблице."})
+        return jsonify({
+            "offers": [], "error": "table_error",
+            "message": "Нет доступа к таблице. В Railway: Variables → GOOGLE_CREDENTIALS_BASE64 (значение из railway_base64.txt) → сохранить → нажать Redeploy (не Restart). Проверка: /api/debug_env",
+        })
 
     if more:
         completed = get_user_completed_cards(uid)
@@ -652,8 +633,9 @@ def _check_table():
     if not JSON_KEY_PATH or not os.path.isfile(JSON_KEY_PATH):
         return jsonify({
             "ok": False,
-            "message": "Ключ Google не найден. В Railway добавь переменную GOOGLE_CREDENTIALS_BASE64 (скопируй из файла railway_base64.txt).",
+            "message": "Ключ не найден. Railway → Variables → GOOGLE_CREDENTIALS_BASE64 (вставь содержимое railway_base64.txt) → сохранить → Redeploy (обязательно Redeploy, не Restart).",
             "error": "missing_credentials",
+            "debug_url": "/api/debug_env",
         }), 500
     try:
         offers_x = load_offers("Список офферов X")
@@ -667,26 +649,24 @@ def _check_table():
     except Exception as e:
         return jsonify({
             "ok": False,
-            "message": "Нет доступа к таблице.",
+            "message": "Нет доступа к таблице. Если ключ только что добавил — в Railway нажми Redeploy (не Restart). Проверка: /api/debug_env",
             "error": str(e),
+            "debug_url": "/api/debug_env",
         }), 500
 
 
 @app.route("/api/check_table", methods=["GET"])
 def api_check_table():
-    """Проверка доступа к Google Таблице: открыть в браузере для проверки связи."""
     return _check_table()
 
 
 @app.route("/check_table", methods=["GET"])
 def check_table_short():
-    """Короткий URL для проверки таблицы."""
     return _check_table()
 
 
 @app.route("/api/debug_env", methods=["GET"])
 def debug_env():
-    """Проверка: видит ли приложение переменные с ключом (без вывода значений)."""
     b64_set = bool(os.environ.get("GOOGLE_CREDENTIALS_BASE64"))
     json_set = bool(os.environ.get("GOOGLE_CREDENTIALS_JSON"))
     b64_len = len(os.environ.get("GOOGLE_CREDENTIALS_BASE64", ""))
@@ -697,13 +677,12 @@ def debug_env():
         "GOOGLE_CREDENTIALS_JSON_set": json_set,
         "GOOGLE_CREDENTIALS_JSON_length": json_len,
         "JSON_KEY_PATH_exists": bool(JSON_KEY_PATH and os.path.isfile(JSON_KEY_PATH)),
-        "hint": "Если оба _set = false, переменная не доходит до приложения. Сделай Redeploy в Railway.",
+        "hint": "Если оба _set = false: добавь GOOGLE_CREDENTIALS_BASE64 в Railway → Variables, вставь значение из railway_base64.txt, сохрани, затем нажми Redeploy (именно Redeploy, не Restart).",
     })
 
 
 @app.route("/api/orders", methods=["POST"])
 def api_orders():
-    """Получить все заявки пользователя из Google Sheets."""
     data = request.json or {}
     uid = str(data.get("user_id", ""))
     if not uid:
@@ -715,7 +694,6 @@ def api_orders():
 
 @app.route("/api/get_ref_link", methods=["POST"])
 def api_get_ref_link():
-    """Получить реферальную ссылку на оффер через API Rafinad (синхронно). При недоступности — оригинальная ссылка (ТЗ)."""
     data = request.json or {}
     uid = str(data.get("user_id", ""))
     offer_id = data.get("offer_id")
@@ -736,10 +714,6 @@ def api_get_ref_link():
 
 @app.route("/api/submit_screenshot", methods=["POST"])
 def api_submit_screenshot():
-    """
-    Пользователь отправляет скриншот оформления.
-    Сохраняем заявку в «Юзеры», пересылаем фото в канал модерации.
-    """
     uid = request.form.get("user_id", "")
     username = request.form.get("username", "")
     card_name = request.form.get("card_name", "")
@@ -759,11 +733,9 @@ def api_submit_screenshot():
     except:
         payout_val = 0
 
-    # Записать в Google Sheets
     rn = save_user_order_sync(uid, username, card_name, payout_val,
                               phone=phone, age=age, ref_link=ref_link)
 
-    # Отправить в канал модерации
     ts = datetime.now().strftime("%d.%m.%Y %H:%M:%S")
     ud = f"@{username}" if username else "Нет username"
     cap = (f"📋 Новая заявка на проверку\n\n"
@@ -777,7 +749,6 @@ def api_submit_screenshot():
 
 @app.route("/api/submit_receipt", methods=["POST"])
 def api_submit_receipt():
-    """Пользователь отправляет фото полученной карты."""
     uid = request.form.get("user_id", "")
     username = request.form.get("username", "")
     card_name = request.form.get("card_name", "")
@@ -804,7 +775,6 @@ def api_submit_receipt():
 
 @app.route("/api/resubmit_screenshot", methods=["POST"])
 def api_resubmit_screenshot():
-    """Пользователь отправляет скриншот заново (очищаем старую строку, создаём новую)."""
     uid = request.form.get("user_id", "")
     username = request.form.get("username", "")
     card_name = request.form.get("card_name", "")
@@ -819,7 +789,6 @@ def api_resubmit_screenshot():
         return jsonify({"error": "photo required"}), 400
     photo_bytes = photo.read()
 
-    # Очистить старую строку
     if old_row:
         try:
             ws = connect_sheets().worksheet("Юзеры")
@@ -839,7 +808,6 @@ def api_resubmit_screenshot():
 
     send_photo_to_channel(photo_bytes, cap, uid, rn, "screenshot")
 
-    # Обновить кэш
     ts2 = str(uid)
     if ts2 in user_orders_data_cache:
         del user_orders_data_cache[ts2]
@@ -849,7 +817,6 @@ def api_resubmit_screenshot():
 
 @app.route("/api/check_status", methods=["POST"])
 def api_check_status():
-    """Проверить актуальный статус строки в Юзеры."""
     data = request.json or {}
     row_number = data.get("row_number")
     if not row_number:
@@ -864,7 +831,6 @@ def api_check_status():
 
 @app.route("/api/referral/create", methods=["POST"])
 def api_referral_create():
-    """Сгенерировать реферальную ссылку."""
     data = request.json or {}
     uid = str(data.get("user_id", ""))
     if not uid:
@@ -890,7 +856,6 @@ def api_referral_create():
 
 @app.route("/api/texts", methods=["GET"])
 def api_texts():
-    """Вернуть все тексты с подставленными настройками."""
     load_texts_from_sheet()
     merged = dict(DEFAULT_TEXTS)
     merged.update(texts_cache)
@@ -903,7 +868,6 @@ def api_texts():
     return jsonify({"texts": result, "settings": settings})
 
 
-# Serve React frontend (если папка есть)
 @app.route("/")
 def serve_index():
     if app.static_folder and os.path.isdir(app.static_folder):
