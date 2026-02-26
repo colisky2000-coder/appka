@@ -2,8 +2,11 @@
 Flask API-сервер для Telegram Web App «Калькулятор заработка» v3.0
 Работает с Google Sheets. Скриншоты пересылаются в канал модерации через Telegram Bot API.
 
-Ключ Google: base64 всего JSON → при старте decode и запись в temp-файл в бинарном режиме (wb).
-Приоритет: GOOGLE_CREDENTIALS_BASE64 → GOOGLE_CREDENTIALS_JSON → хардкод _CREDS_B64.
+Ключ Google (без секретов в коде):
+  GOOGLE_CREDENTIALS_BASE64 — приоритет (для Railway).
+  GOOGLE_CREDENTIALS_JSON — сырой JSON строка.
+  GOOGLE_CREDENTIALS_FILE — путь к JSON-файлу (локальная разработка).
+  Иначе ищется google-credentials.json в папке скрипта.
 """
 
 import os, time, re, threading, random, string, traceback, base64, io, json
@@ -22,27 +25,42 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8005452418:AAHq0dhlehYHuTSVXdI68BOP7AKl
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1i4EML8f69NVuAAd5bCpIHDTRy9ylBByb6QmDHrIx95g")
 SCREENSHOT_CHANNEL_ID = -1003686883800
 
-# Ключ Google: env (BASE64/JSON) приоритетнее; иначе base64-строка → decode → temp file (wb, без искажений)
+# Ключ Google: только env или локальный файл (в коде секретов нет)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 import tempfile
-# Однострочный JSON в base64 (как у опуса — решает Invalid JWT Signature)
-_CREDS_B64 = "eyJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsICJwcm9qZWN0X2lkIjogImRlYmV0LTQ4NTExOSIsICJwcml2YXRlX2tleV9pZCI6ICIzMWQwOTI1NjFkNGMwMWVmYmU0NjYzYTk0MjMyMjgxNmQ3OWYzN2NlIiwgInByaXZhdGVfa2V5IjogIi0tLS0tQkVHSU4gUFJJVkFURSBLRVktLS0tLVxuTUlJRXZBSUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS1l3Z2dTaUFnRUFBb0lCQVFDbUdvc0F1bXFITFFTM1xuUzNtdDJtdGZkOVVHQmRZL29CRHFGZ1dpY3VjVkxqazNtMGxuM0dvcXU0amRKY3pjamFxMFlVMi9KakhBcUFERVxuM3VhWTc3enlsRjVxaXIwYkhjYXQ1THBzc2MwNmVxek0rS3orZ25tVUpORmtkM0ZHbkZKNDJES0FsN0FSRmZNalxuMUkzdzd5YW9RMmNhNUNFaDJCSHNWcFlwYTZLcGpyWGIzRHZ2Y0JDVjViNWU3WFBVWmxIWkNDZ0ZoUzJ4VnlSNlxuWnpGOE5NaU5kd0tVK215OXg2VjZTcG5saHhmTXptUjFuWWhqWnFYQ2VXdzFvMS81VFJxTmZSVkZaYUZtNnY5T1xuYklyeVFRUWp2a1R0Vi9sWHJvWGdGaE1Mb1NYeEtmOUNjY0tRSVhvWSsxZ0plOHRpQTlOT2oxbmJ0TXRNNFFBcFxuRnJnbDZpNFhBZ01CQUFFQ2dnRUFRQjkzRWV6bE94SHlCQ0NxOUthaFZOV1o4eDFGdklJNmhXUERBUmVDaGZhMlxuTi9WR3ZVV2w1cUZIRUxpTEFZbmZJSXQvekE4ZW5kVTlsc0xHR3J4U0lRT04vMnRYM2FQOUV4eDlxNEJvVGU4Vlxuem5zaHJZOEpDRnUrU2g2aUtEUW8wbVlEK1FpVis4S1JmbitMM0RzMm5UYUlFeVdHZE41STdRZndLRVZaSWtOS1xuVWxnc3RUV0FCZ0RuTWIxN21XV1pkLy9sb3p3bnVPamxyNVIraUM1MVV3S2NQUERWSmgzSndVbzl0anJUY2hQSlxuMmkyWnZZYmI4TnhZNTZNdVJmUlQvdi96djVpRU16bnJ3U1VPTVU1TG1XVjJONjF3Q0xGWUV2T3JUV3IxNVcxWlxua0JtR1VMdExoVGFINS95WFh2bGRZc1F6MUZnbElzeFozVTFVTENiQzRRS0JnUURQTFp0NnVmRTgwR0dKU1VpZVxucGNNL3ZJdCtEN2c3QTROSWNlbVVicXR4dE0rNzV3Yndnc2g3UlhrRHFzcFoyVUd5cXQ3dENvZHJRbnpoblVNTVxuUDVFYjcrTUQwY2tDa1kzRzd2TUVmL3p3U2JkenBmYTUyeWRwUVNIVFBOV3hUc1BGUEQzNzBENlVXWXMrOGxWclxuQ3ZobDVwenFDMVhKZU1SRS95OUQ4YVROelFLQmdRRE5Qd3QxcTM4RVl0OEZBOG13K0JERWdYODgyYWNkY3hmVVxuZ0FlY0NNQWdVQU5JSkNBUkd3aGs4YUdpaDJQaVNjU0NZR3lROUQ4dG9jZVZSOVRmckpnbnRDL2dVZ1AwRXkvNlxuOFVGRnlQVDdTWEVSQTZ0N0ZXS2kvaHllcXllS3BnSllwZ3RtSjYvR25qQU9hNU1FRUNCTzk5RXVYSWl1UW9MWFxuVVN3ZnVDV25jd0tCZ0Y5bi9VV1RBMGlpSFloL092WDBGK251QmI3VHRsOVd5c285eXZjVHo5ZlpFQ0RUenhwS1xuMzlBRXVpbTZLTjBmYzJXMzBsa09sRFlNdEQyaGtoSzk0ekVlVTBpYS94b3p0VHA3SjJaWEdqLzljb0hMVjhkV1xuNk50THB5d0R3OVNYRlFocktaQWc0ZkNuRzd5dEZERHJLR0NreG5YeEtseFJSUEVSSXM4REpJV3hBb0dBTkZ6eFxuUDRRUlU3MGx5Tkcra3plMmoydTZXbnZzOXNaMlBmQ3NBRkw3TVVNNGt4OGtUemptVzFxS01qejRick1EUDMvNlxuTXNFZG5UYTVCSXplOG5IR0g5c0ltK0pRditSbFNWQmpwcm91UmkzbWVzREU3eEgxcUQvTWJXNmRGL0ppaHR0VlxuN1NvUzNrbGRXVkI0b1lDN3ZXbmNKRWZYVng0QTQ0NENBOVduUmFFQ2dZQTQ4OE51K3FVdW9iaU5DUEhmNVdZRFxuWC9FRnNkQnd2RkdIL2xkYXZpWE5qMElxWEtNZ1dVS1FMeFh5N3d0OTZzcWg5djllN3UrenBSc0ZIa1VWUHNnclxueVA5NjluVFdMODVCa1dKWitTRUVzeVN4UXRWVkdCK1B2akFtTUZ5L01XbCt5ZjBpM0ZHd00rNnFGNXJ0SjB6Z1xuVk9zbi9mN05KRDZTTEwzZmVtWlBjZz09XG4tLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tXG4iLCAiY2xpZW50X2VtYWlsIjogImRlYmV0LTczQGRlYmV0LTQ4NTExOS5pYW0uZ3NlcnZpY2VhY2NvdW50LmNvbSIsICJjbGllbnRfaWQiOiAiMTA1Njc1MDkxNzA1MDY1NDE2NTg5IiwgImF1dGhfdXJpIjogImh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbS9vL29hdXRoMi9hdXRoIiwgInRva2VuX3VyaSI6ICJodHRwczovL29hdXRoMi5nb29nbGVhcGlzLmNvbS90b2tlbiIsICJhdXRoX3Byb3ZpZGVyX3g1MDlfY2VydF91cmwiOiAiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vb2F1dGgyL3YxL2NlcnRzIiwgImNsaWVudF94NTA5X2NlcnRfdXJsIjogImh0dHBzOi8vd3d3Lmdvb2dsZWFwaXMuY29tL3JvYm90L3YxL21ldGFkYXRhL3g1MDkvZGViZXQtNzMlNDBkZWJldC00ODUxMTkuaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20iLCAidW5pdmVyc2VfZG9tYWluIjogImdvb2dsZWFwaXMuY29tIn0="
+
 _env_b64 = (os.environ.get("GOOGLE_CREDENTIALS_BASE64") or "").strip()
 _env_json = (os.environ.get("GOOGLE_CREDENTIALS_JSON") or "").strip()
+_env_file = (os.environ.get("GOOGLE_CREDENTIALS_FILE") or "").strip()
 _creds_bytes = None
+
 if _env_b64:
     try:
         _b64_clean = _env_b64.replace("\r", "").replace("\n", "").replace(" ", "")
         _creds_bytes = base64.b64decode(_b64_clean)
-        print("[INFO] Google credentials: из GOOGLE_CREDENTIALS_BASE64")
+        print("[INFO] Google credentials: GOOGLE_CREDENTIALS_BASE64")
     except Exception as e:
         print(f"[WARNING] GOOGLE_CREDENTIALS_BASE64: {e}")
 if _creds_bytes is None and _env_json:
     _creds_bytes = _env_json.encode("utf-8")
-    print("[INFO] Google credentials: из GOOGLE_CREDENTIALS_JSON")
-if _creds_bytes is None and _CREDS_B64:
-    _creds_bytes = base64.b64decode(_CREDS_B64)
-    print("[INFO] Google credentials: из хардкода _CREDS_B64")
+    print("[INFO] Google credentials: GOOGLE_CREDENTIALS_JSON")
+if _creds_bytes is None and _env_file and os.path.isfile(_env_file):
+    try:
+        with open(_env_file, "rb") as _f:
+            _creds_bytes = _f.read()
+        print(f"[INFO] Google credentials: файл {_env_file}")
+    except Exception as e:
+        print(f"[WARNING] GOOGLE_CREDENTIALS_FILE: {e}")
+if _creds_bytes is None:
+    _local_path = os.path.join(SCRIPT_DIR, "google-credentials.json")
+    if os.path.isfile(_local_path):
+        try:
+            with open(_local_path, "rb") as _f:
+                _creds_bytes = _f.read()
+            print("[INFO] Google credentials: google-credentials.json в папке проекта")
+        except Exception as e:
+            print(f"[WARNING] google-credentials.json: {e}")
+
 JSON_KEY_PATH = None
 if _creds_bytes:
     _tf = tempfile.NamedTemporaryFile(mode="wb", suffix=".json", delete=False)
@@ -59,6 +77,8 @@ if _creds_bytes:
     except Exception as e:
         print(f"[ERROR] Ключ не парсится: {e}")
         JSON_KEY_PATH = None
+elif not _env_b64 and not _env_json:
+    print("[WARNING] Google credentials не заданы: GOOGLE_CREDENTIALS_BASE64, GOOGLE_CREDENTIALS_JSON или google-credentials.json")
 
 _static = os.path.abspath(os.path.join(SCRIPT_DIR, "frontend", "dist"))
 if not os.path.isdir(_static):
