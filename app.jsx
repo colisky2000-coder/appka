@@ -158,6 +158,11 @@ export default function App() {
       setCompletedCards([]);
       setSkippedCards([]);
       setIsMoreCards(more);
+      if (res.error === "table_error") {
+        showToast(res.message || "Нет доступа к таблице. Проверьте настройки.");
+        goTo("start");
+        return;
+      }
       if (o.length === 0) {
         showToast("Все доступные карты уже оформлены!");
         goTo(hasOrders ? "cabinet" : "start");

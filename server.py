@@ -374,33 +374,29 @@ def load_offers(sheet_name):
     now = time.time()
     if sheet_name in offers_cache and now - offers_cache_time.get(sheet_name, 0) < 60:
         return offers_cache[sheet_name]
-    try:
-        rows = connect_sheets().worksheet(sheet_name).get_all_values()[1:]
-        offers = []
-        for row in rows:
-            if len(row) >= 5:
-                link, name, pay, comment, status = row[0].strip(), row[1].strip(), row[2].strip(), row[3].strip(), row[4].strip().lower()
-                if status == "да" and link and name and pay:
-                    oid = None
-                    if "rafinad.io/offers/" in link:
-                        try:
-                            oid = int(link.split("/offers/")[1].strip("/"))
-                        except:
-                            pass
+    rows = connect_sheets().worksheet(sheet_name).get_all_values()[1:]
+    offers = []
+    for row in rows:
+        if len(row) >= 5:
+            link, name, pay, comment, status = row[0].strip(), row[1].strip(), row[2].strip(), row[3].strip(), row[4].strip().lower()
+            if status == "да" and link and name and pay:
+                oid = None
+                if "rafinad.io/offers/" in link:
                     try:
-                        pv = float(pay)
+                        oid = int(link.split("/offers/")[1].strip("/"))
                     except:
-                        pv = 0
-                    offers.append({
-                        'name': name, 'payout': pv, 'comment': comment,
-                        'offer_id': oid, 'original_link': link
-                    })
-        offers_cache[sheet_name] = offers
-        offers_cache_time[sheet_name] = now
-        return offers
-    except Exception as e:
-        print(f"Load offers error {sheet_name}: {e}")
-        return []
+                        pass
+                try:
+                    pv = float(pay)
+                except:
+                    pv = 0
+                offers.append({
+                    'name': name, 'payout': pv, 'comment': comment,
+                    'offer_id': oid, 'original_link': link
+                })
+    offers_cache[sheet_name] = offers
+    offers_cache_time[sheet_name] = now
+    return offers
 
 
 def get_user_orders(tid, force_refresh=False):
@@ -607,7 +603,12 @@ def api_offers():
     more = data.get("more", False)
 
     sheet_name = "Список офферов X" if age == "under18" else "Список офферов Y"
-    offers = load_offers(sheet_name)
+    try:
+        offers = load_offers(sheet_name)
+    except Exception as e:
+        print(f"[api/offers] Error: {e}")
+        traceback.print_exc()
+        return jsonify({"offers": [], "error": "table_error", "message": "Нет доступа к таблице. Проверьте GOOGLE_CREDENTIALS_JSON и доступ к таблице."})
 
     if more:
         completed = get_user_completed_cards(uid)
