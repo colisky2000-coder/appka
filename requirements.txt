@@ -1,0 +1,6 @@
+flask>=3.0
+flask-cors>=4.0
+gspread>=5.12
+oauth2client>=4.1
+requests>=2.31
+gunicorn>=21.0

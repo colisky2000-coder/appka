@@ -1,0 +1,10 @@
+debet-485119-31d092561d4c.json
+node_modules/
+frontend/node_modules/
+frontend/dist/
+__pycache__/
+.env
+.venv/
+*.log
+.idea/
+.vscode/
