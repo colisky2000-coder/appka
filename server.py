@@ -663,6 +663,23 @@ def check_table_short():
     return _check_table()
 
 
+@app.route("/api/debug_env", methods=["GET"])
+def debug_env():
+    """Проверка: видит ли приложение переменные с ключом (без вывода значений)."""
+    b64_set = bool(os.environ.get("GOOGLE_CREDENTIALS_BASE64"))
+    json_set = bool(os.environ.get("GOOGLE_CREDENTIALS_JSON"))
+    b64_len = len(os.environ.get("GOOGLE_CREDENTIALS_BASE64", ""))
+    json_len = len(os.environ.get("GOOGLE_CREDENTIALS_JSON", ""))
+    return jsonify({
+        "GOOGLE_CREDENTIALS_BASE64_set": b64_set,
+        "GOOGLE_CREDENTIALS_BASE64_length": b64_len,
+        "GOOGLE_CREDENTIALS_JSON_set": json_set,
+        "GOOGLE_CREDENTIALS_JSON_length": json_len,
+        "JSON_KEY_PATH_exists": os.path.isfile(JSON_KEY_PATH),
+        "hint": "Если оба _set = false, переменная не доходит до приложения. Сделай Redeploy в Railway.",
+    })
+
+
 @app.route("/api/orders", methods=["POST"])
 def api_orders():
     """Получить все заявки пользователя из Google Sheets."""
