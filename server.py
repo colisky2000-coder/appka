@@ -617,6 +617,26 @@ def api_offers():
     return jsonify({"offers": offers})
 
 
+@app.route("/api/check_table", methods=["GET"])
+def api_check_table():
+    """Проверка доступа к Google Таблице: открыть в браузере для проверки связи."""
+    try:
+        offers_x = load_offers("Список офферов X")
+        offers_y = load_offers("Список офферов Y")
+        return jsonify({
+            "ok": True,
+            "message": "Связь с таблицей есть.",
+            "offers_x": len(offers_x),
+            "offers_y": len(offers_y),
+        })
+    except Exception as e:
+        return jsonify({
+            "ok": False,
+            "message": "Нет доступа к таблице.",
+            "error": str(e),
+        }), 500
+
+
 @app.route("/api/orders", methods=["POST"])
 def api_orders():
     """Получить все заявки пользователя из Google Sheets."""
