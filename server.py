@@ -19,13 +19,21 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8005452418:AAHq0dhlehYHuTSVXdI68BOP7AKl
 SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1i4EML8f69NVuAAd5bCpIHDTRy9ylBByb6QmDHrIx95g")
 SCREENSHOT_CHANNEL_ID = -1003686883800
 
-# JSON ключ — файл рядом со скриптом или из переменной GOOGLE_CREDENTIALS_JSON (для деплоя)
+# JSON ключ — файл рядом, либо GOOGLE_CREDENTIALS_JSON, либо GOOGLE_CREDENTIALS_BASE64 (для деплоя)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 _json_path = os.path.join(SCRIPT_DIR, "debet-485119-31d092561d4c.json")
-if os.environ.get("GOOGLE_CREDENTIALS_JSON"):
+_json_content = None
+if os.environ.get("GOOGLE_CREDENTIALS_BASE64"):
+    try:
+        _json_content = base64.b64decode(os.environ["GOOGLE_CREDENTIALS_BASE64"]).decode("utf-8")
+    except Exception as e:
+        print(f"[WARNING] GOOGLE_CREDENTIALS_BASE64 decode error: {e}")
+elif os.environ.get("GOOGLE_CREDENTIALS_JSON"):
+    _json_content = os.environ["GOOGLE_CREDENTIALS_JSON"]
+if _json_content:
     import tempfile
-    _tf = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
-    _tf.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
+    _tf = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
+    _tf.write(_json_content)
     _tf.close()
     JSON_KEY_PATH = _tf.name
 else:
