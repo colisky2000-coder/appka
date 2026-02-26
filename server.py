@@ -1,10 +1,12 @@
 """
-Flask API-сервер для Telegram Web App «Калькулятор заработка».
-Работает с Google Sheets точно так же, как bot.py — те же листы, структуры, кэши.
-Скриншоты пересылаются в канал модерации через Telegram Bot API.
+Flask API-сервер для Telegram Web App «Калькулятор заработка» v3.0
+Работает с Google Sheets. Скриншоты пересылаются в канал модерации через Telegram Bot API.
+
+Ключ Google: base64 всего JSON → при старте decode и запись в temp-файл в бинарном режиме (wb).
+Приоритет: GOOGLE_CREDENTIALS_BASE64 → GOOGLE_CREDENTIALS_JSON → хардкод _CREDS_B64.
 """
 
-import os, time, re, threading, random, string, traceback, base64, io
+import os, time, re, threading, random, string, traceback, base64, io, json
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
@@ -15,36 +17,48 @@ import requests as http_requests
 # ============================================================
 # КОНФИГУРАЦИЯ (из bot.py)
 # ============================================================
-# Задавай в переменных окружения (Railway / .env). В репозитории не храним.
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
+# Railway / .env; дефолты для быстрого запуска (можно переопределить переменными)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8005452418:AAHq0dhlehYHuTSVXdI68BOP7AKlhDfzVa0")
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1i4EML8f69NVuAAd5bCpIHDTRy9ylBByb6QmDHrIx95g")
 SCREENSHOT_CHANNEL_ID = -1003686883800
 
-# JSON ключ — зашит прямо в код (Railway не принимает переменные с ключом нормально)
+# Ключ Google: env (BASE64/JSON) приоритетнее; иначе base64-строка → decode → temp file (wb, без искажений)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
-_HARDCODED_CREDS = {
-    "type": "service_account",
-    "project_id": "debet-485119",
-    "private_key_id": "31d092561d4c01efbe4663a942322816d79f37ce",
-    "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCmGosAumqHLQS3\nS3mt2mtfd9UGBdY/oBDqFgWicucVLjk3m0ln3Goqu4jdJczcjaq0YU2/JjHAqADE\n3uaY77zylF5qir0bHcat5Lpssc06eqzM+Kz+gnmUJNFkd3FGnFJ42DKAl7ARFfMj\n1I3w7yaoQ2ca5CEh2BHsVpYpa6KpjrXb3DvvcBCV5b5e7XPUZlHZCCgFhS2xVyR6\nZzF8NMiNdwKU+my9x6V6SpnlhxfMzmR1nYhjZqXCeWw1o1/5TRqNfRVFZaFm6v9O\nbIryQQQjvkTtV/lXroXgFhMLoSXxKf9CccKQIXoY+1gJe8tiA9NOj1nbtMtM4QAp\nFrgl6i4XAgMBAAECggEAQB93EezlOxHyBCCq9KahVNWZ8x1FvII6hWPDAReChfa2\nN/VGvUWl5qFHELiLAYnfIIt/zA8endU9lsLGGrxSIQON/2tX3aP9Exx9q4BoTe8V\nznshrY8JCFu+Sh6iKDQo0mYD+QiV+8KRfn+L3Ds2nTaIEyWGdN5I7QfwKEVZIkNK\nUlgstTWABgDnMb17mWWZd//lozwnuOjlr5R+iC51UwKcPPDVJh3JwUo9tjrTchPJ\n2i2ZvYbb8NxY56MuRfRT/v/zv5iEMznrwSUOMU5LmWV2N61wCLFYEvOrTWr15W1Z\nkBmGULtLhTaH5/yXXvldYsQz1FglIsxZ3U1ULCbC4QKBgQDPLZt6ufE80GGJSUie\npcM/vIt+D7g7A4NIcemUbqtxtM+75wbwgsh7RXkDqspZ2UGyqt7tCodrQnzhnUMM\nP5Eb7+MD0ckCkY3G7vMEf/zwSbdzpfa52ydpQSHTPNWxTsPFPD370D6UWYs+8lVr\nCvhl5pzqC1XJeMRE/y9D8aTNzQKBgQDNPwt1q38EYt8FA8mw+BDEgX882acdcxfU\ngAecCMAgUANIJCARGwhk8aGih2PiScSCYGyQ9D8toceVR9TfrJgntC/gUgP0Ey/6\n8UFFyPT7SXERA6t7FWKi/hyeqyeKpgJYpgtmJ6/GnjAOa5MEECBO99EuXIiuQoLX\nUSwfuCWncwKBgF9n/UWTA0iiHYh/OvX0F+nuBb7Ttl9Wyso9yvcTz9fZECDTzxpK\n39AEuim6KN0fc2W30lkOlDYMtD2hkhK94zEeU0ia/xoztTp7J2ZXGj/9coHLV8dW\n6NtLpywDw9SXFQhrKZAg4fCnG7ytFDDrKGCkxnXxKlxRRPERIs8DJIWxAoGANFzx\nP4QRU70lyNG+kze2j2u6Wnvs9sZ2PfCsAFL7MUM4kx8kTzjmW1qKMjz4brMDP3/6\nMsEdnTa5BIze8nHGH9sIm+JQv+RlSVBjprouRi3mesDE7xH1qD/MbW6dF/JihttV\n7SoS3kldWVB4oYC7vWncJEfXVx4A444CA9WnRaECgYA488Nu+qUuobiNCPHf5WYD\nX/EFsdBwvFGH/ldaviXNj0IqXKMgWUKQLxXy7wt96sqh9v9e7u+zpRsFHkUVPsgr\nyP969nTWL85BkWJZ+SEEsySxQtVVGB+PvjAmMFy/MWl+yf0i3FGwM+6qF5rtJ0zg\nVOsn/f7NJD6SLL3femZPcg==\n-----END PRIVATE KEY-----\n",
-    "client_email": "debet-73@debet-485119.iam.gserviceaccount.com",
-    "client_id": "105675091705065416589",
-    "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-    "token_uri": "https://oauth2.googleapis.com/token",
-    "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-    "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/debet-73%40debet-485119.iam.gserviceaccount.com",
-    "universe_domain": "googleapis.com"
-}
-
-# Пишем ключ во временный файл как сырой JSON (как в оригинале), без json.dump — иначе подпись JWT может ломаться
-import tempfile as _tempfile
-_CREDS_JSON_STR = '{"type":"service_account","project_id":"debet-485119","private_key_id":"31d092561d4c01efbe4663a942322816d79f37ce","private_key":"-----BEGIN PRIVATE KEY-----\\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCmGosAumqHLQS3\\nS3mt2mtfd9UGBdY/oBDqFgWicucVLjk3m0ln3Goqu4jdJczcjaq0YU2/JjHAqADE\\n3uaY77zylF5qir0bHcat5Lpssc06eqzM+Kz+gnmUJNFkd3FGnFJ42DKAl7ARFfMj\\n1I3w7yaoQ2ca5CEh2BHsVpYpa6KpjrXb3DvvcBCV5b5e7XPUZlHZCCgFhS2xVyR6\\nZzF8NMiNdwKU+my9x6V6SpnlhxfMzmR1nYhjZqXCeWw1o1/5TRqNfRVFZaFm6v9O\\nbIryQQQjvkTtV/lXroXgFhMLoSXxKf9CccKQIXoY+1gJe8tiA9NOj1nbtMtM4QAp\\nFrgl6i4XAgMBAAECggEAQB93EezlOxHyBCCq9KahVNWZ8x1FvII6hWPDAReChfa2\\nN/VGvUWl5qFHELiLAYnfIIt/zA8endU9lsLGGrxSIQON/2tX3aP9Exx9q4BoTe8V\\nznshrY8JCFu+Sh6iKDQo0mYD+QiV+8KRfn+L3Ds2nTaIEyWGdN5I7QfwKEVZIkNK\\nUlgstTWABgDnMb17mWWZd//lozwnuOjlr5R+iC51UwKcPPDVJh3JwUo9tjrTchPJ\\n2i2ZvYbb8NxY56MuRfRT/v/zv5iEMznrwSUOMU5LmWV2N61wCLFYEvOrTWr15W1Z\\nkBmGULtLhTaH5/yXXvldYsQz1FglIsxZ3U1ULCbC4QKBgQDPLZt6ufE80GGJSUie\\npcM/vIt+D7g7A4NIcemUbqtxtM+75wbwgsh7RXkDqspZ2UGyqt7tCodrQnzhnUMM\\nP5Eb7+MD0ckCkY3G7vMEf/zwSbdzpfa52ydpQSHTPNWxTsPFPD370D6UWYs+8lVr\\nCvhl5pzqC1XJeMRE/y9D8aTNzQKBgQDNPwt1q38EYt8FA8mw+BDEgX882acdcxfU\\ngAecCMAgUANIJCARGwhk8aGih2PiScSCYGyQ9D8toceVR9TfrJgntC/gUgP0Ey/6\\n8UFFyPT7SXERA6t7FWKi/hyeqyeKpgJYpgtmJ6/GnjAOa5MEECBO99EuXIiuQoLX\\nUSwfuCWncwKBgF9n/UWTA0iiHYh/OvX0F+nuBb7Ttl9Wyso9yvcTz9fZECDTzxpK\\n39AEuim6KN0fc2W30lkOlDYMtD2hkhK94zEeU0ia/xoztTp7J2ZXGj/9coHLV8dW\\n6NtLpywDw9SXFQhrKZAg4fCnG7ytFDDrKGCkxnXxKlxRRPERIs8DJIWxAoGANFzx\\nP4QRU70lyNG+kze2j2u6Wnvs9sZ2PfCsAFL7MUM4kx8kTzjmW1qKMjz4brMDP3/6\\nMsEdnTa5BIze8nHGH9sIm+JQv+RlSVBjprouRi3mesDE7xH1qD/MbW6dF/JihttV\\n7SoS3kldWVB4oYC7vWncJEfXVx4A444CA9WnRaECgYA488Nu+qUuobiNCPHf5WYD\\nX/EFsdBwvFGH/ldaviXNj0IqXKMgWUKQLxXy7wt96sqh9v9e7u+zpRsFHkUVPsgr\\nyP969nTWL85BkWJZ+SEEsySxQtVVGB+PvjAmMFy/MWl+yf0i3FGwM+6qF5rtJ0zg\\nVOsn/f7NJD6SLL3femZPcg==\\n-----END PRIVATE KEY-----\\n","client_email":"debet-73@debet-485119.iam.gserviceaccount.com","client_id":"105675091705065416589","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_x509_cert_url":"https://www.googleapis.com/robot/v1/metadata/x509/debet-73%40debet-485119.iam.gserviceaccount.com","universe_domain":"googleapis.com"}'
-_tf = _tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
-_tf.write(_CREDS_JSON_STR)  # пишем как есть: в JSON \n — два символа, парсер сам превратит в перевод строки
-_tf.close()
-JSON_KEY_PATH = _tf.name
-print(f"[INFO] Google credentials loaded from raw JSON, tmp file: {JSON_KEY_PATH}")
+import tempfile
+# Однострочный JSON в base64 (как у опуса — решает Invalid JWT Signature)
+_CREDS_B64 = "eyJ0eXBlIjogInNlcnZpY2VfYWNjb3VudCIsICJwcm9qZWN0X2lkIjogImRlYmV0LTQ4NTExOSIsICJwcml2YXRlX2tleV9pZCI6ICIzMWQwOTI1NjFkNGMwMWVmYmU0NjYzYTk0MjMyMjgxNmQ3OWYzN2NlIiwgInByaXZhdGVfa2V5IjogIi0tLS0tQkVHSU4gUFJJVkFURSBLRVktLS0tLVxuTUlJRXZBSUJBREFOQmdrcWhraUc5dzBCQVFFRkFBU0NCS1l3Z2dTaUFnRUFBb0lCQVFDbUdvc0F1bXFITFFTM1xuUzNtdDJtdGZkOVVHQmRZL29CRHFGZ1dpY3VjVkxqazNtMGxuM0dvcXU0amRKY3pjamFxMFlVMi9KakhBcUFERVxuM3VhWTc3enlsRjVxaXIwYkhjYXQ1THBzc2MwNmVxek0rS3orZ25tVUpORmtkM0ZHbkZKNDJES0FsN0FSRmZNalxuMUkzdzd5YW9RMmNhNUNFaDJCSHNWcFlwYTZLcGpyWGIzRHZ2Y0JDVjViNWU3WFBVWmxIWkNDZ0ZoUzJ4VnlSNlxuWnpGOE5NaU5kd0tVK215OXg2VjZTcG5saHhmTXptUjFuWWhqWnFYQ2VXdzFvMS81VFJxTmZSVkZaYUZtNnY5T1xuYklyeVFRUWp2a1R0Vi9sWHJvWGdGaE1Mb1NYeEtmOUNjY0tRSVhvWSsxZ0plOHRpQTlOT2oxbmJ0TXRNNFFBcFxuRnJnbDZpNFhBZ01CQUFFQ2dnRUFRQjkzRWV6bE94SHlCQ0NxOUthaFZOV1o4eDFGdklJNmhXUERBUmVDaGZhMlxuTi9WR3ZVV2w1cUZIRUxpTEFZbmZJSXQvekE4ZW5kVTlsc0xHR3J4U0lRT04vMnRYM2FQOUV4eDlxNEJvVGU4Vlxuem5zaHJZOEpDRnUrU2g2aUtEUW8wbVlEK1FpVis4S1JmbitMM0RzMm5UYUlFeVdHZE41STdRZndLRVZaSWtOS1xuVWxnc3RUV0FCZ0RuTWIxN21XV1pkLy9sb3p3bnVPamxyNVIraUM1MVV3S2NQUERWSmgzSndVbzl0anJUY2hQSlxuMmkyWnZZYmI4TnhZNTZNdVJmUlQvdi96djVpRU16bnJ3U1VPTVU1TG1XVjJONjF3Q0xGWUV2T3JUV3IxNVcxWlxua0JtR1VMdExoVGFINS95WFh2bGRZc1F6MUZnbElzeFozVTFVTENiQzRRS0JnUURQTFp0NnVmRTgwR0dKU1VpZVxucGNNL3ZJdCtEN2c3QTROSWNlbVVicXR4dE0rNzV3Yndnc2g3UlhrRHFzcFoyVUd5cXQ3dENvZHJRbnpoblVNTVxuUDVFYjcrTUQwY2tDa1kzRzd2TUVmL3p3U2JkenBmYTUyeWRwUVNIVFBOV3hUc1BGUEQzNzBENlVXWXMrOGxWclxuQ3ZobDVwenFDMVhKZU1SRS95OUQ4YVROelFLQmdRRE5Qd3QxcTM4RVl0OEZBOG13K0JERWdYODgyYWNkY3hmVVxuZ0FlY0NNQWdVQU5JSkNBUkd3aGs4YUdpaDJQaVNjU0NZR3lROUQ4dG9jZVZSOVRmckpnbnRDL2dVZ1AwRXkvNlxuOFVGRnlQVDdTWEVSQTZ0N0ZXS2kvaHllcXllS3BnSllwZ3RtSjYvR25qQU9hNU1FRUNCTzk5RXVYSWl1UW9MWFxuVVN3ZnVDV25jd0tCZ0Y5bi9VV1RBMGlpSFloL092WDBGK251QmI3VHRsOVd5c285eXZjVHo5ZlpFQ0RUenhwS1xuMzlBRXVpbTZLTjBmYzJXMzBsa09sRFlNdEQyaGtoSzk0ekVlVTBpYS94b3p0VHA3SjJaWEdqLzljb0hMVjhkV1xuNk50THB5d0R3OVNYRlFocktaQWc0ZkNuRzd5dEZERHJLR0NreG5YeEtseFJSUEVSSXM4REpJV3hBb0dBTkZ6eFxuUDRRUlU3MGx5Tkcra3plMmoydTZXbnZzOXNaMlBmQ3NBRkw3TVVNNGt4OGtUemptVzFxS01qejRick1EUDMvNlxuTXNFZG5UYTVCSXplOG5IR0g5c0ltK0pRditSbFNWQmpwcm91UmkzbWVzREU3eEgxcUQvTWJXNmRGL0ppaHR0VlxuN1NvUzNrbGRXVkI0b1lDN3ZXbmNKRWZYVng0QTQ0NENBOVduUmFFQ2dZQTQ4OE51K3FVdW9iaU5DUEhmNVdZRFxuWC9FRnNkQnd2RkdIL2xkYXZpWE5qMElxWEtNZ1dVS1FMeFh5N3d0OTZzcWg5djllN3UrenBSc0ZIa1VWUHNnclxueVA5NjluVFdMODVCa1dKWitTRUVzeVN4UXRWVkdCK1B2akFtTUZ5L01XbCt5ZjBpM0ZHd00rNnFGNXJ0SjB6Z1xuVk9zbi9mN05KRDZTTEwzZmVtWlBjZz09XG4tLS0tLUVORCBQUklWQVRFIEtFWS0tLS0tXG4iLCAiY2xpZW50X2VtYWlsIjogImRlYmV0LTczQGRlYmV0LTQ4NTExOS5pYW0uZ3NlcnZpY2VhY2NvdW50LmNvbSIsICJjbGllbnRfaWQiOiAiMTA1Njc1MDkxNzA1MDY1NDE2NTg5IiwgImF1dGhfdXJpIjogImh0dHBzOi8vYWNjb3VudHMuZ29vZ2xlLmNvbS9vL29hdXRoMi9hdXRoIiwgInRva2VuX3VyaSI6ICJodHRwczovL29hdXRoMi5nb29nbGVhcGlzLmNvbS90b2tlbiIsICJhdXRoX3Byb3ZpZGVyX3g1MDlfY2VydF91cmwiOiAiaHR0cHM6Ly93d3cuZ29vZ2xlYXBpcy5jb20vb2F1dGgyL3YxL2NlcnRzIiwgImNsaWVudF94NTA5X2NlcnRfdXJsIjogImh0dHBzOi8vd3d3Lmdvb2dsZWFwaXMuY29tL3JvYm90L3YxL21ldGFkYXRhL3g1MDkvZGViZXQtNzMlNDBkZWJldC00ODUxMTkuaWFtLmdzZXJ2aWNlYWNjb3VudC5jb20iLCAidW5pdmVyc2VfZG9tYWluIjogImdvb2dsZWFwaXMuY29tIn0="
+_env_b64 = (os.environ.get("GOOGLE_CREDENTIALS_BASE64") or "").strip()
+_env_json = (os.environ.get("GOOGLE_CREDENTIALS_JSON") or "").strip()
+_creds_bytes = None
+if _env_b64:
+    try:
+        _b64_clean = _env_b64.replace("\r", "").replace("\n", "").replace(" ", "")
+        _creds_bytes = base64.b64decode(_b64_clean)
+        print("[INFO] Google credentials: из GOOGLE_CREDENTIALS_BASE64")
+    except Exception as e:
+        print(f"[WARNING] GOOGLE_CREDENTIALS_BASE64: {e}")
+if _creds_bytes is None and _env_json:
+    _creds_bytes = _env_json.encode("utf-8")
+    print("[INFO] Google credentials: из GOOGLE_CREDENTIALS_JSON")
+if _creds_bytes is None and _CREDS_B64:
+    _creds_bytes = base64.b64decode(_CREDS_B64)
+    print("[INFO] Google credentials: из хардкода _CREDS_B64")
+JSON_KEY_PATH = None
+if _creds_bytes:
+    _tf = tempfile.NamedTemporaryFile(mode="wb", suffix=".json", delete=False)
+    _tf.write(_creds_bytes)
+    _tf.close()
+    JSON_KEY_PATH = _tf.name
+    try:
+        with open(JSON_KEY_PATH, "r", encoding="utf-8") as _f:
+            _test = json.load(_f)
+        if _test.get("private_key") and _test.get("client_email"):
+            print(f"[INFO] Ключ OK, client_email: {_test.get('client_email', '?')}")
+        else:
+            JSON_KEY_PATH = None
+    except Exception as e:
+        print(f"[ERROR] Ключ не парсится: {e}")
+        JSON_KEY_PATH = None
 
 _static = os.path.abspath(os.path.join(SCRIPT_DIR, "frontend", "dist"))
 if not os.path.isdir(_static):
