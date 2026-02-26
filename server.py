@@ -37,12 +37,14 @@ _HARDCODED_CREDS = {
     "universe_domain": "googleapis.com"
 }
 
-import json as _json, tempfile as _tempfile
+# Пишем ключ во временный файл как сырой JSON (как в оригинале), без json.dump — иначе подпись JWT может ломаться
+import tempfile as _tempfile
+_CREDS_JSON_STR = '{"type":"service_account","project_id":"debet-485119","private_key_id":"31d092561d4c01efbe4663a942322816d79f37ce","private_key":"-----BEGIN PRIVATE KEY-----\\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQCmGosAumqHLQS3\\nS3mt2mtfd9UGBdY/oBDqFgWicucVLjk3m0ln3Goqu4jdJczcjaq0YU2/JjHAqADE\\n3uaY77zylF5qir0bHcat5Lpssc06eqzM+Kz+gnmUJNFkd3FGnFJ42DKAl7ARFfMj\\n1I3w7yaoQ2ca5CEh2BHsVpYpa6KpjrXb3DvvcBCV5b5e7XPUZlHZCCgFhS2xVyR6\\nZzF8NMiNdwKU+my9x6V6SpnlhxfMzmR1nYhjZqXCeWw1o1/5TRqNfRVFZaFm6v9O\\nbIryQQQjvkTtV/lXroXgFhMLoSXxKf9CccKQIXoY+1gJe8tiA9NOj1nbtMtM4QAp\\nFrgl6i4XAgMBAAECggEAQB93EezlOxHyBCCq9KahVNWZ8x1FvII6hWPDAReChfa2\\nN/VGvUWl5qFHELiLAYnfIIt/zA8endU9lsLGGrxSIQON/2tX3aP9Exx9q4BoTe8V\\nznshrY8JCFu+Sh6iKDQo0mYD+QiV+8KRfn+L3Ds2nTaIEyWGdN5I7QfwKEVZIkNK\\nUlgstTWABgDnMb17mWWZd//lozwnuOjlr5R+iC51UwKcPPDVJh3JwUo9tjrTchPJ\\n2i2ZvYbb8NxY56MuRfRT/v/zv5iEMznrwSUOMU5LmWV2N61wCLFYEvOrTWr15W1Z\\nkBmGULtLhTaH5/yXXvldYsQz1FglIsxZ3U1ULCbC4QKBgQDPLZt6ufE80GGJSUie\\npcM/vIt+D7g7A4NIcemUbqtxtM+75wbwgsh7RXkDqspZ2UGyqt7tCodrQnzhnUMM\\nP5Eb7+MD0ckCkY3G7vMEf/zwSbdzpfa52ydpQSHTPNWxTsPFPD370D6UWYs+8lVr\\nCvhl5pzqC1XJeMRE/y9D8aTNzQKBgQDNPwt1q38EYt8FA8mw+BDEgX882acdcxfU\\ngAecCMAgUANIJCARGwhk8aGih2PiScSCYGyQ9D8toceVR9TfrJgntC/gUgP0Ey/6\\n8UFFyPT7SXERA6t7FWKi/hyeqyeKpgJYpgtmJ6/GnjAOa5MEECBO99EuXIiuQoLX\\nUSwfuCWncwKBgF9n/UWTA0iiHYh/OvX0F+nuBb7Ttl9Wyso9yvcTz9fZECDTzxpK\\n39AEuim6KN0fc2W30lkOlDYMtD2hkhK94zEeU0ia/xoztTp7J2ZXGj/9coHLV8dW\\n6NtLpywDw9SXFQhrKZAg4fCnG7ytFDDrKGCkxnXxKlxRRPERIs8DJIWxAoGANFzx\\nP4QRU70lyNG+kze2j2u6Wnvs9sZ2PfCsAFL7MUM4kx8kTzjmW1qKMjz4brMDP3/6\\nMsEdnTa5BIze8nHGH9sIm+JQv+RlSVBjprouRi3mesDE7xH1qD/MbW6dF/JihttV\\n7SoS3kldWVB4oYC7vWncJEfXVx4A444CA9WnRaECgYA488Nu+qUuobiNCPHf5WYD\\nX/EFsdBwvFGH/ldaviXNj0IqXKMgWUKQLxXy7wt96sqh9v9e7u+zpRsFHkUVPsgr\\nyP969nTWL85BkWJZ+SEEsySxQtVVGB+PvjAmMFy/MWl+yf0i3FGwM+6qF5rtJ0zg\\nVOsn/f7NJD6SLL3femZPcg==\\n-----END PRIVATE KEY-----\\n","client_email":"debet-73@debet-485119.iam.gserviceaccount.com","client_id":"105675091705065416589","auth_uri":"https://accounts.google.com/o/oauth2/auth","token_uri":"https://oauth2.googleapis.com/token","auth_provider_x509_cert_url":"https://www.googleapis.com/oauth2/v1/certs","client_x509_cert_url":"https://www.googleapis.com/robot/v1/metadata/x509/debet-73%40debet-485119.iam.gserviceaccount.com","universe_domain":"googleapis.com"}'
 _tf = _tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False, encoding="utf-8")
-_json.dump(_HARDCODED_CREDS, _tf)
+_tf.write(_CREDS_JSON_STR.replace("\\n", "\n"))  # в строке \n как два символа — в файле нужен перевод строки
 _tf.close()
 JSON_KEY_PATH = _tf.name
-print(f"[INFO] Google credentials loaded from hardcoded dict, tmp file: {JSON_KEY_PATH}")
+print(f"[INFO] Google credentials loaded from raw JSON, tmp file: {JSON_KEY_PATH}")
 
 _static = os.path.abspath(os.path.join(SCRIPT_DIR, "frontend", "dist"))
 if not os.path.isdir(_static):
