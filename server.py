@@ -38,9 +38,27 @@ if _json_content:
     _tf.close()
     JSON_KEY_PATH = _tf.name
 else:
-    JSON_KEY_PATH = _json_path
-    if not os.path.isfile(JSON_KEY_PATH) and os.environ.get("RAILWAY_ENVIRONMENT"):
-        print("[WARNING] JSON key file not found and GOOGLE_CREDENTIALS_JSON/BASE64 not set. Set GOOGLE_CREDENTIALS_BASE64 in Railway Variables.")
+    # Обход: файл в репо (для Railway без переменных). Сначала google-credentials.json, потом обычный.
+    _file_in_repo = os.path.join(SCRIPT_DIR, "google-credentials.json")
+    if os.path.isfile(_file_in_repo):
+        JSON_KEY_PATH = _file_in_repo
+    else:
+        JSON_KEY_PATH = _json_path
+    # Если файл — заглушка (пустой ключ), попробовать второй путь (локально — debet-*.json)
+    if os.path.isfile(JSON_KEY_PATH):
+        try:
+            import json as _json
+            with open(JSON_KEY_PATH, "r", encoding="utf-8") as _f:
+                _data = _json.load(_f)
+            if not (_data.get("private_key") and _data.get("client_email")):
+                if os.environ.get("RAILWAY_ENVIRONMENT"):
+                    print("[WARNING] google-credentials.json — заглушка. Замените на реальный ключ или задайте GOOGLE_CREDENTIALS_BASE64.")
+                JSON_KEY_PATH = _json_path if os.path.isfile(_json_path) else None
+        except Exception:
+            pass
+    if not JSON_KEY_PATH or not os.path.isfile(JSON_KEY_PATH):
+        if os.environ.get("RAILWAY_ENVIRONMENT"):
+            print("[WARNING] No credentials: set GOOGLE_CREDENTIALS_BASE64 or replace google-credentials.json in repo.")
 
 _static = os.path.abspath(os.path.join(SCRIPT_DIR, "frontend", "dist"))
 if not os.path.isdir(_static):
@@ -155,6 +173,8 @@ DEFAULT_SETTINGS = {
 # ============================================================
 def connect_sheets():
     global sheets_client_cache, sheets_client_cache_time
+    if not JSON_KEY_PATH or not os.path.isfile(JSON_KEY_PATH):
+        raise RuntimeError("Google credentials not configured (set GOOGLE_CREDENTIALS_BASE64 or replace google-credentials.json)")
     now = time.time()
     if sheets_client_cache and (now - sheets_client_cache_time) < SHEETS_CLIENT_TTL:
         return sheets_client_cache
@@ -629,7 +649,7 @@ def api_offers():
 
 
 def _check_table():
-    if not os.path.isfile(JSON_KEY_PATH):
+    if not JSON_KEY_PATH or not os.path.isfile(JSON_KEY_PATH):
         return jsonify({
             "ok": False,
             "message": "Ключ Google не найден. В Railway добавь переменную GOOGLE_CREDENTIALS_BASE64 (скопируй из файла railway_base64.txt).",
@@ -676,7 +696,7 @@ def debug_env():
         "GOOGLE_CREDENTIALS_BASE64_length": b64_len,
         "GOOGLE_CREDENTIALS_JSON_set": json_set,
         "GOOGLE_CREDENTIALS_JSON_length": json_len,
-        "JSON_KEY_PATH_exists": os.path.isfile(JSON_KEY_PATH),
+        "JSON_KEY_PATH_exists": bool(JSON_KEY_PATH and os.path.isfile(JSON_KEY_PATH)),
         "hint": "Если оба _set = false, переменная не доходит до приложения. Сделай Redeploy в Railway.",
     })
 
