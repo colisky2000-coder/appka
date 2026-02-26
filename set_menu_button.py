@@ -1,18 +1,21 @@
 """
 Установить кнопку меню бота «Открыть приложение» (Web App).
-Запуск: python set_menu_button.py https://твой-ngrok-или-домен.ngrok-free.dev
-Или: set WEBAPP_URL=https://... и python set_menu_button.py
+Запуск: set BOT_TOKEN=твой_токен && python set_menu_button.py https://твой-домен.up.railway.app
+Или задай BOT_TOKEN в .env.
 """
 import os
 import sys
 import requests
 
-BOT_TOKEN = "8005452418:AAHq0dhlehYHuTSVXdI68BOP7AKlhDfzVa0"
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 def main():
+    if not BOT_TOKEN:
+        print("Задай BOT_TOKEN: set BOT_TOKEN=твой_токен && python set_menu_button.py <url>")
+        sys.exit(1)
     url = (sys.argv[1] if len(sys.argv) > 1 else os.environ.get("WEBAPP_URL", "")).strip()
     if not url:
-        print("Укажи URL приложения: python set_menu_button.py https://твой-адрес.ngrok-free.dev")
+        print("Укажи URL приложения: python set_menu_button.py https://твой-адрес.up.railway.app")
         sys.exit(1)
     if not url.startswith("https://"):
         print("URL должен начинаться с https://")

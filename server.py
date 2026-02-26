@@ -15,8 +15,9 @@ import requests as http_requests
 # ============================================================
 # КОНФИГУРАЦИЯ (из bot.py)
 # ============================================================
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8005452418:AAHq0dhlehYHuTSVXdI68BOP7AKlhDfzVa0")
-SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "1i4EML8f69NVuAAd5bCpIHDTRy9ylBByb6QmDHrIx95g")
+# Задавай в переменных окружения (Railway / .env). В репозитории не храним.
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "")
 SCREENSHOT_CHANNEL_ID = -1003686883800
 
 # JSON ключ — файл рядом, либо GOOGLE_CREDENTIALS_JSON, либо GOOGLE_CREDENTIALS_BASE64 (для деплоя)

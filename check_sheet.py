@@ -1,11 +1,15 @@
 # -*- coding: utf-8 -*-
 import os
+import sys
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 JSON = os.path.join(SCRIPT_DIR, "debet-485119-31d092561d4c.json")
-SPREADSHEET_ID = "1i4EML8f69NVuAAd5bCpIHDTRy9ylBByb6QmDHrIx95g"
+SPREADSHEET_ID = os.environ.get("SPREADSHEET_ID", "") or (sys.argv[1] if len(sys.argv) > 1 else "")
+if not SPREADSHEET_ID:
+    print("Задай ID таблицы: set SPREADSHEET_ID=твой_id или python check_sheet.py твой_id")
+    sys.exit(1)
 
 scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
 creds = ServiceAccountCredentials.from_json_keyfile_name(JSON, scope)
