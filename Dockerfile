@@ -5,12 +5,11 @@ COPY app.jsx ./
 COPY frontend/ ./frontend/
 RUN cd frontend && npm install && npm run build
 
-# Финальный образ (ключ Google: из переменных или из файла google-credentials.json в репо)
+# Финальный образ. Ключ Google: переменная GOOGLE_CREDENTIALS_BASE64 в Railway.
 FROM python:3.11-slim
 WORKDIR /app
 COPY server.py requirements.txt ./
-# Ключ из файла (опционально): скопируйте debet-*.json в google-credentials.json и добавьте в репо — тогда переменные не нужны
-COPY google-credentials.json ./
+# Ключ Google только из переменной GOOGLE_CREDENTIALS_BASE64 на Railway (файл не в репо)
 COPY --from=frontend /app/frontend/dist ./frontend/dist
 RUN pip install --no-cache-dir -r requirements.txt
 ENV PORT=5000
