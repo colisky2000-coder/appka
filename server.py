@@ -929,12 +929,15 @@ if __name__ == "__main__":
         print(f"Frontend: раздаю из {app.static_folder}")
     else:
         print("Frontend: папка frontend/dist не найдена! Запусти: cd frontend && npm run build")
-    print("Проверка и создание листов в Google Таблице (если нужно)...")
-    init_sheets_if_needed()
-    print("Загружаю тексты и настройки из Google Sheets...")
-    load_texts_from_sheet()
-    load_settings_from_sheet()
-    print(f"Тексты: {len(texts_cache)}, Настройки: {len(settings_cache)}")
+    if JSON_KEY_PATH:
+        print("Проверка и создание листов в Google Таблице (если нужно)...")
+        init_sheets_if_needed()
+        print("Загружаю тексты и настройки из Google Sheets...")
+        load_texts_from_sheet()
+        load_settings_from_sheet()
+        print(f"Тексты: {len(texts_cache)}, Настройки: {len(settings_cache)}")
+    else:
+        print("[WARNING] Google credentials не заданы — таблица недоступна, но сервер запустится.")
     port = int(os.environ.get("PORT", 5000))
     print(f"Сервер запускается на http://0.0.0.0:{port}")
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port, debug=False)
