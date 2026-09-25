@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Личный кабинет</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23151515'/%3E%3Ccircle cx='16' cy='16' r='7' fill='%23e6b95a'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <div id="auth" hidden></div>
+
+  <div class="layout" id="layout" hidden>
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#/dashboard" id="brand"></a>
+      <nav class="nav" id="nav"></nav>
+      <div class="side-bottom" id="side-bottom"></div>
+    </aside>
+    <div class="overlay" id="overlay"></div>
+    <div class="main">
+      <header class="topbar">
+        <button class="btn ghost burger" id="burger" aria-label="Меню"></button>
+        <button class="btn ghost sm" id="back" aria-label="Назад"></button>
+        <div class="crumbs" id="crumbs"></div>
+      </header>
+      <main class="content" id="page"></main>
+    </div>
+  </div>
+
+  <a class="fab" href="#/support" title="Поддержка" id="fab" hidden></a>
+  <div id="modal-root"></div>
+
+  <script src="/static/js/core.js"></script>
+  <script src="/static/js/user.js"></script>
+  <script src="/static/js/admin.js"></script>
+  <script>App.start();</script>
+</body>
+</html>
