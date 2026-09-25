@@ -1,0 +1,3 @@
+# Для хостинга с SQLite (Sprinthost): только необходимое
+flask>=3.0
+sqlalchemy>=2.0

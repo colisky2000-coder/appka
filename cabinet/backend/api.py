@@ -6,31 +6,30 @@ from datetime import timedelta
 from flask import Blueprint, Response, g, make_response, request, send_file
 from sqlalchemy import func, or_, select
 
-from . import features, media, settings, telegram
+from . import bot, features, media, richtext, settings, telegram
 from .features import require
 from .auth import (
-    COOKIE, admin_required, check_password, check_rate, client_ip, hash_password, login_required,
+    COOKIE, check_password, check_rate, client_ip, cookie_path, hash_password, login_required,
     reset_rate, set_cookie, start_session, validate_password,
 )
 from .db import db, utcnow
 from .models import (
-    CONVERSION_STATUSES, Article, ArticleProgram, BalanceTx, Click, Conversion, Favorite, Lesson, LessonDone,
+    CONVERSION_STATUSES, Article, ArticleProgram, BalanceTx, Click, Conversion, Favorite, Invite, Lesson, LessonDone,
     Material, MaterialProgram, News, NewsRead, Offer, OfferLink, Program, Step, StepDone, StepTask,
     Tariff, TaskDone, TeamMember, Ticket, TicketMessage, TopUpRequest, User, UserSession,
 )
 from .services import (
-    change_balance, create_conversion, default_tariff, issue_link, link_counts, money_summary,
-    payout_for, ser_conversion, ser_link, ser_tariff, ser_user, top_participants,
+    change_balance, clean_login, create_conversion, default_tariff, get_invite, invite_usable, issue_link,
+    link_counts, money_summary, norm_login, payout_for, public_name, ser_conversion, ser_link, ser_tariff,
+    ser_user, suggest_login, top_participants, use_invite,
 )
-from .util import ApiError, clean_email, clean_inn, clean_str, iso, new_code, ok, parse_date, rub, to_kop
+from .util import ApiError, clean_inn, clean_str, iso, new_code, ok, parse_date, rub, to_kop
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
 
 def body():
     return request.get_json(silent=True) or {}
-
-
 
 
 # ================= auth =================
@@ -41,23 +40,47 @@ def config():
                "telegram_bot": telegram.bot_username() if telegram.enabled() else ""})
 
 
+# Регистрация: ссылка-приглашение -> код из Telegram-бота -> логин и пароль
+@bp.post("/auth/tg/start")
+def signup_start():
+    if not telegram.enabled() or not telegram.bot_username():
+        raise ApiError("Регистрация временно недоступна: не настроен Telegram-бот. Сообщите администратору", 503)
+    inv = get_invite(body().get("invite"))
+    check_rate("signup:" + client_ip(), limit=30)
+    token = bot.new_signup(inv)
+    db.commit()
+    return ok({"token": token, "bot": telegram.bot_username(),
+               "url": f"https://t.me/{telegram.bot_username()}?start={bot.PREFIX}{token}"})
+
+
+@bp.post("/auth/tg/check")
+def signup_check():
+    d = body()
+    check_rate("code:" + client_ip(), limit=30)
+    rec = bot.get_signup(d.get("token"))
+    bot.check_code(rec, d["token"], d.get("code"))
+    return ok({"login": suggest_login(rec.tg_username), "username": rec.tg_username, "name": rec.tg_name})
+
+
 @bp.post("/auth/register")
 def register():
     d = body()
-    invite = invite_tariff(d["invite"]) if d.get("invite") else None
-    if not invite and not settings.get_bool("allow_registration"):
-        raise ApiError("Регистрация закрыта. Обратитесь к администратору", 403)
-    check_rate("reg:" + client_ip())
-    email = clean_email(d.get("email"))
+    rec = bot.get_signup(d.get("token"))
+    if not rec.verified:
+        raise ApiError("Сначала подтвердите Telegram кодом из бота")
+    inv = db.get(Invite, rec.invite_id)
+    if not invite_usable(inv):
+        raise ApiError("Ссылка-приглашение больше не действует. Попросите у администратора новую")
+    if db.query(User).filter_by(tg_id=rec.tg_id).first():
+        raise ApiError("Этот Telegram уже зарегистрирован — войдите по логину и паролю")
+    login = clean_login(d.get("login"))
     validate_password(d.get("password"))
-    if db.query(User).filter_by(email=email).first():
-        raise ApiError("Пользователь с таким email уже есть")
     t = default_tariff()
-    u = User(email=email, password_hash=hash_password(d["password"]),
-             username=clean_str(d.get("username"), "Telegram", 64).lstrip("@"),
+    u = User(login=login, password_hash=hash_password(d["password"]), username=rec.tg_username,
+             display_name=rec.tg_name, tg_id=rec.tg_id, chat_id=rec.chat_id,
              tariff_id=t.id if t else None, links_access=settings.get_bool("default_links_access"))
-    if invite:
-        apply_invite(u, invite)
+    use_invite(u, inv)
+    rec.used = True
     db.add(u)
     db.flush()
     token = start_session(u)
@@ -70,10 +93,9 @@ def login():
     d = body()
     key = "login:" + client_ip()
     check_rate(key)
-    email = str(d.get("email") or "").strip().lower()
-    u = db.query(User).filter_by(email=email).first()
+    u = db.query(User).filter_by(login=norm_login(d.get("login") or d.get("email"))).first()
     if not u or not check_password(u, d.get("password") or ""):
-        raise ApiError("Неверный email или пароль", 401)
+        raise ApiError("Неверный логин или пароль", 401)
     if u.is_blocked:
         raise ApiError("Аккаунт заблокирован", 403)
     reset_rate(key)
@@ -88,7 +110,7 @@ def logout():
         g.session.revoked = True
         db.commit()
     resp = make_response(ok())
-    resp.delete_cookie(COOKIE, path="/")
+    resp.delete_cookie(COOKIE, path=cookie_path())
     return resp
 
 
@@ -119,8 +141,6 @@ def update_me():
     d, u = body(), g.user
     if "display_name" in d:
         u.display_name = clean_str(d["display_name"], "Отображаемое имя", 120)
-    if "username" in d:
-        u.username = clean_str(d["username"], "Telegram", 64).lstrip("@")
     for f in ("show_in_top", "notify"):
         if f in d:
             setattr(u, f, bool(d[f]))
@@ -272,13 +292,13 @@ def program_materials(pid):
 
 def ser_article(a):
     return {"id": a.id, "kind": "article", "title": a.title, "description": a.description, "category": a.category,
-            "url": a.url, "cover": media.cover_link("articles", a), "created_at": iso(a.created_at)}
+            "url": a.url, "has_body": bool(a.body), "cover": media.cover_link("articles", a), "created_at": iso(a.created_at)}
 
 
 def ser_material(m):
     return {"id": m.id, "kind": "material", "title": m.title, "description": m.description, "url": m.url,
             "filename": m.filename, "size": m.size, "cover": media.cover_link("materials", m),
-            "download": f"/api/materials/{m.id}/download" if m.filename else "", "created_at": iso(m.created_at)}
+            "download": f"api/materials/{m.id}/download" if m.filename else "", "created_at": iso(m.created_at)}
 
 
 def can_view_article(a):
@@ -309,7 +329,7 @@ def article(aid):
     a = db.get(Article, aid)
     if not a or not can_view_article(a):
         raise ApiError("Статья не найдена", 404)
-    return ok({**ser_article(a), "body": a.body})
+    return ok({**ser_article(a), "body": richtext.for_output(a.body)})
 
 
 @bp.get("/materials")
@@ -366,7 +386,7 @@ def step_target(s, lessons_by_id, nums):
         m = db.get(Material, s.target_id)
         if m:
             return {"type": "material", "id": m.id, "title": m.title,
-                    "url": f"/api/materials/{m.id}/download" if m.filename else m.url}
+                    "url": f"api/materials/{m.id}/download" if m.filename else m.url}
     if t == "url" and s.target_url:
         return {"type": "url", "url": s.target_url, "title": s.target_url}
     return None
@@ -419,7 +439,7 @@ def lesson(lid):
     for s in db.query(Step).filter_by(program_id=p.id, target_type="lesson", target_id=l.id).order_by(Step.sort, Step.id):
         if s.tasks:
             todo += [{"kind": "task", "id": t.id, "text": t.text, "done": t.id in tasks_done} for t in s.tasks]
-    return ok({"id": l.id, "num": i + 1, "total": len(lessons), "title": l.title, "body": l.body,
+    return ok({"id": l.id, "num": i + 1, "total": len(lessons), "title": l.title, "body": richtext.for_output(l.body),
                "duration": l.duration, "video_url": l.video_url, "embed": media.video_embed(l.video_url),
                "cover": media.cover_link("lessons", l), "done": l.id in lessons_done,
                "prev_id": lessons[i - 1].id if i > 0 else None,
@@ -487,28 +507,16 @@ def learn_materials():
 
 
 # ================= приглашения =================
-def invite_tariff(code):
-    t = db.query(Tariff).filter_by(invite_code=code, invite_enabled=True).first() if code else None
-    if not t:
-        raise ApiError("Ссылка-приглашение недействительна", 404)
-    return t
-
-
-def apply_invite(user, t):
-    user.tariff_id = t.id
-    user.tariff_until = utcnow() + timedelta(days=t.invite_days) if t.invite_days else None
-
-
 @bp.get("/invite/<code>")
 def invite_info(code):
-    t = invite_tariff(code)
-    return ok({"tariff": t.name, "description": t.description, "days": t.invite_days})
+    inv = get_invite(code)
+    return ok({"tariff": inv.tariff.name, "description": inv.tariff.description, "days": inv.days})
 
 
 @bp.post("/invite/<code>/activate")
 @login_required
 def invite_activate(code):
-    apply_invite(g.user, invite_tariff(code))
+    use_invite(g.user, get_invite(code))
     db.commit()
     return ok(ser_user(g.user))
 
@@ -787,7 +795,7 @@ def ser_ticket(t, messages=False, admin=False):
     if messages:
         d["messages"] = [{"id": m.id, "is_admin": m.is_admin, "body": m.body, "created_at": iso(m.created_at)} for m in t.messages]
     if admin:
-        d["user"] = {"id": t.user.id, "email": t.user.email, "name": t.user.display_name or t.user.username}
+        d["user"] = {"id": t.user.id, "login": t.user.login, "name": public_name(t.user)}
     return d
 
 

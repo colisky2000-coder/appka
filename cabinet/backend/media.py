@@ -124,8 +124,15 @@ def find_preview_url(page_url):
 
 
 # ---------- видео ----------
-def video_embed(url):
+def video_embed(url, autoplay=True):
     """Ссылка на видео -> адрес встраиваемого плеера (или None, если сайт не поддерживается)."""
+    src = _embed(url)
+    if src and not autoplay:
+        src = re.sub(r"([?&])autoplay=1&?", r"\1", src).rstrip("?&")
+    return src
+
+
+def _embed(url):
     if not url:
         return None
     u = url.strip()
@@ -152,7 +159,7 @@ def video_embed(url):
 # ---------- превью у записей (CoverMixin) ----------
 def cover_link(kind, obj):
     if obj.cover_mime:
-        return f"/media/{kind}/{obj.id}/cover?v={obj.cover_v}"
+        return f"media/{kind}/{obj.id}/cover?v={obj.cover_v}"  # относительный: сайт может быть в подпапке
     return obj.cover_url or None
 
 

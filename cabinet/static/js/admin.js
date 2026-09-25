@@ -1,4 +1,4 @@
-/* Админка: управление пользователями, контентом, заявками, трафиком и настройками. */
+/* Админка: пользователи, приглашения, контент, заявки и настройки. */
 (() => {
   const { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, qs, icon, linkify, cover } = App;
   const P = App.pages;
@@ -6,6 +6,7 @@
   App.adminMenu = [
     { id: "admin", label: "Обзор", icon: "grid" },
     { id: "a-users", label: "Пользователи", icon: "users" },
+    { id: "a-invites", label: "Приглашения", icon: "gift" },
     { id: "a-conversions", label: "Заявки", icon: "file", badge: true },
     { id: "a-links", label: "Ссылки", icon: "link", badge: true },
     { id: "a-learning", label: "Обучение", icon: "trend" },
@@ -54,8 +55,9 @@
     const lbl = `${esc(f.label)}${f.required ? " *" : ""}`;
     switch (f.type) {
       case "text":
-        return `<div class="field"><label>${lbl}</label><textarea class="input" name="${f.name}" rows="${f.name === "body" ? 10 : 4}" ${req}>${esc(v)}</textarea>
-          ${f.name === "body" ? `<span class="hint">Форматирование: «# Заголовок», «## Подзаголовок», «- пункт списка», **жирный**. Ссылки становятся кликабельными.</span>` : ""}</div>`;
+        return `<div class="field"><label>${lbl}</label><textarea class="input" name="${f.name}" rows="4" ${req}>${esc(v)}</textarea></div>`;
+      case "html": // визуальный редактор: создаётся после открытия окна
+        return `<div class="field"><label>${lbl}</label><div data-rte="${f.name}"></div></div>`;
       case "bool":
         return `<label class="row gap8 mb"><span class="switch"><input type="checkbox" name="${f.name}" ${v ? "checked" : ""}><span></span></span>${lbl}</label>`;
       case "money":
@@ -84,6 +86,10 @@
   function readForm(form, fields) {
     const out = {};
     for (const f of fields) {
+      if (f.type === "html") {
+        out[f.name] = $(`[data-rte="${f.name}"]`, form)._rte.getHTML();
+        continue;
+      }
       if (f.type === "features" || f.type === "programs") {
         const vals = $$(`input[name="${f.name}"]:checked`, form).map((i) => i.value);
         out[f.name] = f.type === "programs" ? vals.map(Number) : vals;
@@ -165,6 +171,7 @@
       $$("[data-down]", box).forEach((b) => b.onclick = () => move(+b.dataset.down, 1));
       o.bind && o.bind(box, items);
     };
+    const hasEditor = fields.some((f) => f.type === "html");
     const open = (item) => App.modal(item ? "Редактирование" : (o.addLabel || "Новая запись"), `
       <form id="cf">${fields.map((f) => fieldHtml(f, item?.[f.name], !item)).join("")}
         ${o.cover ? coverFields(item, o.cover.label) : ""}${o.extra ? o.extra(item) : ""}
@@ -172,6 +179,7 @@
         <div class="row sticky-actions"><button class="btn primary" type="submit">Сохранить</button><button type="button" class="btn" data-close>Отмена</button></div></form>`,
       (m, close) => {
         const form = $("#cf", m);
+        $$("[data-rte]", form).forEach((b) => { b._rte = App.richEditor(b, item?.[b.dataset.rte] || ""); });
         bindCoverPreview(form);
         o.onModal && o.onModal(m, item);
         App.onSubmit(form, async () => {
@@ -181,7 +189,7 @@
           resetCaches(res);
           close(); App.toast("Сохранено"); await load(); draw();
         });
-      }, { wide: true });
+      }, { wide: true, xl: hasEditor, sticky: hasEditor });
     $("[data-add]", box).onclick = () => open(null);
     $("[data-flt]", box).oninput = draw;
     await load(); draw();
@@ -222,36 +230,97 @@
   });
 
   // ---------- тарифы ----------
-  const inviteLink = (code) => `${location.origin}/join/${code}`;
   P["a-tariffs"] = crudPage("tariffs", {
     title: "Тарифы", icon: "card", addLabel: "Новый тариф",
     sub: "Галочками выбираются разделы, которые видит человек. Кнопка «Смотреть» покажет сайт глазами тарифа.",
     deleteText: "Удалить тариф? Пользователи на нём останутся без тарифа.",
     columns: [
       ["Название", (t) => `<b>${esc(t.name)}</b> <span class="hint">${esc(t.code)}</span>${t.is_default ? " " + App.badge("по умолчанию", "gray") : ""}`],
-      ["Разделы", (t) => `<span class="small">${t.features.map((k) => esc(schemaCache.features.find((f) => f.key === k)?.label.split(" (")[0] || k)).join(", ") || "—"}</span>`],
+      ["Разделы", (t) => `<span class="small wrap-cell">${t.features.map((k) => esc(schemaCache.features.find((f) => f.key === k)?.label.split(" (")[0] || k)).join(", ") || "—"}</span>`],
       ["Программа", (t) => esc((programsCache || []).find((p) => p.id === t.program_id)?.title || "—")],
       ["Цена", (t) => t.price ? `${money(t.price)} / ${t.period_days} дн.` : "бесплатно"],
-      ["Приглашение", (t) => t.invite_enabled ? `<button class="btn sm" data-invite="${esc(t.invite_code)}">${icon("copy")}Ссылка</button>` : `<span class="muted">выкл.</span>`],
+      ["Приглашения", (t) => `<span class="nowrap"><a class="link-btn" href="#/a-invites/tariff=${t.id}">${t.invites} шт.</a>
+        <button class="btn sm" data-newinv="${t.id}" title="Новая ссылка-приглашение на этот тариф">${icon("plus")}Ссылка</button></span>`],
       ["", (t) => `<button class="btn sm ghost" data-view="${t.id}">${icon("eye")}Смотреть</button>`],
     ],
-    extra: (t) => t ? `<div class="notice">${icon("link")}<div class="minw0">Ссылка-приглашение: <span class="mono break">${esc(inviteLink(t.invite_code))}</span>
-      <div class="row mt8"><button type="button" class="btn sm" data-copyinv>${icon("copy")}Копировать</button><button type="button" class="btn sm ghost" data-regen>Сменить ссылку</button></div>
-      <span class="hint">После смены старая ссылка перестанет работать.</span></div></div>` : "",
-    onModal: (m, t) => {
-      if (!t) return;
-      $("[data-copyinv]", m).onclick = () => App.copy(inviteLink(t.invite_code));
-      $("[data-regen]", m).onclick = async () => {
-        if (!(await App.confirm("Сменить ссылку? Старая перестанет работать."))) return;
-        try { const r = await App.post(`/api/admin/tariffs/${t.id}/invite`); t.invite_code = r.invite_code; $(".mono", m).textContent = inviteLink(r.invite_code); App.toast("Новая ссылка готова"); }
-        catch (e) { App.fail(e); }
-      };
-    },
+    extra: (t) => t ? `<div class="notice">${icon("gift")}<div>Зарегистрироваться на тариф можно только по ссылке-приглашению.
+      <a class="link-btn" href="#/a-invites/tariff=${t.id}">Ссылки этого тарифа (${t.invites})</a></div></div>` : "",
     bind: (box, items) => {
-      $$("[data-invite]", box).forEach((b) => b.onclick = () => App.copy(inviteLink(b.dataset.invite)));
+      $$("[data-newinv]", box).forEach((b) => b.onclick = () => inviteDialog(null, +b.dataset.newinv, () => location.hash = `#/a-invites/tariff=${b.dataset.newinv}`));
       $$("[data-view]", box).forEach((b) => b.onclick = () => App.setViewTariff(items.find((t) => t.id === +b.dataset.view)));
     },
   });
+
+  // ---------- приглашения ----------
+  const inviteState = (i) => !i.is_active ? ["Выключена", "gray"] : i.max_uses && i.uses >= i.max_uses ? ["Лимит исчерпан", "bad"]
+    : !i.usable ? ["Истекла", "bad"] : ["Работает", "ok"];
+  function inviteDialog(inv, tariffId, onSaved) {
+    const tariffs = tariffsCache || [];
+    App.modal(inv ? "Ссылка-приглашение" : "Новая ссылка-приглашение", `<form id="if">
+      <div class="field"><label>Тариф *</label><select class="input" name="tariff_id" required>${tariffs.map((t) =>
+        `<option value="${t.id}" ${(inv ? inv.tariff_id : tariffId) === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select>
+        <span class="hint">По ссылке человек зарегистрируется сразу на этот тариф</span></div>
+      <div class="field"><label>Заметка — для кого ссылка</label><input class="input" name="title" maxlength="200" value="${esc(inv?.title || "")}" placeholder="Например: поток сентября, блогер Иван"></div>
+      <div class="grid g2">
+        <div class="field"><label>Лимит регистраций (0 — без лимита)</label><input class="input" name="max_uses" type="number" min="0" value="${inv?.max_uses ?? 0}"></div>
+        <div class="field"><label>Доступ к тарифу, дней (0 — бессрочно)</label><input class="input" name="days" type="number" min="0" value="${inv?.days ?? 0}"></div>
+        <div class="field"><label>Ссылка работает до (пусто — всегда)</label><input class="input" name="expires_at" type="date" value="${esc(inv?.expires_on || "")}"></div>
+      </div>
+      ${inv ? `<label class="row gap8 mb"><span class="switch"><input type="checkbox" name="is_active" ${inv.is_active ? "checked" : ""}><span></span></span>Ссылка включена</label>` : ""}
+      <div class="form-error"></div>
+      <div class="row"><button class="btn primary" type="submit">${inv ? "Сохранить" : "Создать ссылку"}</button><button type="button" class="btn" data-close>Отмена</button></div></form>`,
+    (m, close) => App.onSubmit($("#if", m), async (d, f) => {
+      if (inv) d.is_active = f.is_active.checked;
+      const saved = inv ? await App.patch(`/api/admin/invites/${inv.id}`, d) : await App.post("/api/admin/invites", d);
+      close();
+      if (!inv) inviteReady(saved);
+      else App.toast("Сохранено");
+      onSaved && onSaved(saved);
+    }));
+  }
+  const inviteReady = (i) => App.modal("Ссылка готова", `<p>Отправьте её человеку — по ней он зарегистрируется на тариф <b>«${esc(i.tariff)}»</b>
+      через Telegram-бота.</p><div class="linkbox">${esc(i.url)}</div>
+    <div class="row"><button class="btn primary" data-copy>${icon("copy")}Скопировать</button><button class="btn" data-close>Готово</button></div>`,
+  (m) => { $("[data-copy]", m).onclick = () => App.copy(i.url); });
+
+  P["a-invites"] = {
+    admin: true, crumbs: ["Админка", "Приглашения"],
+    async render(el, arg) {
+      await loadTariffs(true);
+      const p = argParams(arg);
+      el._tariff = +p.tariff || 0;
+      el.innerHTML = `${App.pageHead("gift", "Приглашения", "Зарегистрироваться можно только по ссылке-приглашению. Каждая ссылка ведёт на свой тариф.")}
+        ${App.cfg.telegram_bot ? "" : `<div class="alert mb">${icon("warn")}<span>Telegram-бот не настроен — по ссылкам пока нельзя зарегистрироваться. Задайте TELEGRAM_BOT_TOKEN и TELEGRAM_BOT_USERNAME.</span></div>`}
+        <div class="row mb"><button class="btn primary" id="iadd">${icon("plus")}Новая ссылка</button>
+          <select class="input wauto" id="itariff"><option value="">Все тарифы</option>${tariffsCache.map((t) => `<option value="${t.id}" ${el._tariff === t.id ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div>
+        <div id="ilist">${App.loading()}</div>`;
+    },
+    mount(el) {
+      const load = async () => {
+        let items;
+        const tid = $("#itariff", el).value;
+        try { items = await App.get("/api/admin/invites" + (tid ? `?tariff=${tid}` : "")); } catch (e) { return App.fail(e); }
+        $("#ilist", el).innerHTML = items.length ? `<div class="table-wrap"><table><tr><th>Тариф</th><th>Для кого</th><th>Ссылка</th><th>Регистраций</th><th>Доступ</th><th>Работает до</th><th>Статус</th><th></th></tr>
+          ${items.map((i) => { const [st, tone] = inviteState(i); return `<tr>
+            <td><b>${esc(i.tariff)}</b></td><td class="wrap">${esc(i.title) || '<span class="muted">—</span>'}</td>
+            <td class="nowrap"><span class="mono clip1">${esc(i.url)}</span> <button class="btn sm ghost" data-copy="${esc(i.url)}" title="Скопировать">${icon("copy")}</button></td>
+            <td><a class="link-btn" href="#/a-users/invite=${i.id}">${i.uses}${i.max_uses ? " / " + i.max_uses : ""}</a></td>
+            <td>${i.days ? `${i.days} дн.` : "бессрочно"}</td><td>${i.expires_on ? fmtDate(i.expires_on) : "—"}</td>
+            <td>${App.badge(st, tone)}</td>
+            <td class="nowrap"><button class="btn sm ghost" data-edit="${i.id}" title="Изменить">${icon("edit")}</button><button class="btn sm ghost" data-del="${i.id}" title="Удалить">${icon("trash")}</button></td></tr>`; }).join("")}</table></div>`
+          : `<div class="card soft">${App.empty("gift", "Ссылок пока нет", "Создайте ссылку и отправьте её человеку — он зарегистрируется на нужный тариф.")}</div>`;
+        $$("[data-copy]", el).forEach((b) => b.onclick = () => App.copy(b.dataset.copy));
+        $$("[data-edit]", el).forEach((b) => b.onclick = () => inviteDialog(items.find((x) => x.id === +b.dataset.edit), 0, load));
+        $$("[data-del]", el).forEach((b) => b.onclick = async () => {
+          if (!(await App.confirm("Удалить ссылку? Она перестанет работать. Уже зарегистрированные останутся.", "Удалить"))) return;
+          try { await App.del(`/api/admin/invites/${b.dataset.del}`); App.toast("Удалено"); load(); } catch (e) { App.fail(e); }
+        });
+      };
+      $("#itariff", el).onchange = load;
+      $("#iadd", el).onclick = () => inviteDialog(null, +$("#itariff", el).value || tariffsCache.find((t) => t.is_default)?.id, load);
+      load();
+    },
+  };
 
   // ---------- обучение ----------
   P["a-learning"] = {
@@ -422,8 +491,8 @@
             : "Пока не подключён (заглушка в backend/partner_api.py). Ссылки выдаются вручную в разделе «Ссылки»."}</span></div>
             ${o.partner_api ? `<button class="btn sm" id="sync">Синхронизировать статусы</button>` : App.badge("заглушка", "gray")}</div>
           <div class="setting"><div class="txt"><b>Telegram-бот</b><span class="muted">${o.telegram
-            ? "Токен задан. Нажмите, чтобы подключить вебхук (нужен HTTPS-адрес сайта)."
-            : "Не настроен: задайте переменные TELEGRAM_BOT_TOKEN и TELEGRAM_BOT_USERNAME."}</span></div>
+            ? "Токен задан. Бот присылает коды при регистрации и уведомления. На хостинге с HTTPS вебхук подключается сам при запуске; кнопка — подключить заново."
+            : "Не настроен: задайте TELEGRAM_BOT_TOKEN и TELEGRAM_BOT_USERNAME в .env. Без бота регистрация по приглашениям не работает."}</span></div>
             ${o.telegram ? `<button class="btn sm" id="hook">Подключить вебхук</button>` : App.badge("выключен", "gray")}</div>
         </div>`;
     },
@@ -436,10 +505,12 @@
   // ---------- пользователи ----------
   P["a-users"] = {
     admin: true, crumbs: ["Админка", "Пользователи"],
-    async render(el) {
+    async render(el, arg) {
       await loadTariffs();
-      el.innerHTML = `${App.pageHead("users", "Пользователи", "Доступы, тарифы, балансы и блокировки")}
-        <div class="row mb"><div class="input-icon w280">${icon("search")}<input class="input" id="uq" placeholder="Email, имя, Telegram"></div>
+      el._invite = +argParams(arg).invite || 0;
+      el.innerHTML = `${App.pageHead("users", "Пользователи", "Доступы, тарифы, балансы и блокировки. Новые пользователи регистрируются по ссылкам-приглашениям.")}
+        ${el._invite ? `<div class="notice">${icon("gift")}<div>Показаны те, кто зарегистрировался по выбранной ссылке-приглашению. <a class="link-btn" href="#/a-users">Показать всех</a></div></div>` : ""}
+        <div class="row mb"><div class="input-icon w280">${icon("search")}<input class="input" id="uq" placeholder="Логин, имя, Telegram"></div>
           <select class="input wauto" id="urole"><option value="">Все роли</option><option value="user">Пользователи</option><option value="admin">Администраторы</option></select>
           <span class="spacer"></span><button class="btn primary" id="uadd">${icon("plus")}Создать</button></div>
         <div id="ulist">${App.loading()}</div>`;
@@ -448,9 +519,9 @@
       let page = 1;
       const load = async () => {
         let r;
-        try { r = await App.get("/api/admin/users?" + qs({ q: $("#uq", el).value, role: $("#urole", el).value, page })); } catch (e) { return App.fail(e); }
-        $("#ulist", el).innerHTML = r.data.length ? `<div class="table-wrap"><table><tr><th>Email</th><th>Имя / Telegram</th><th>Роль</th><th>Тариф</th><th>Баланс</th><th>Ссылки</th><th>Статус</th><th>Регистрация</th></tr>
-          ${r.data.map((u) => `<tr class="clickable" data-id="${u.id}"><td><b>${esc(u.email)}</b></td><td>${esc(u.display_name)}${u.username ? ` <span class="hint">@${esc(u.username)}</span>` : ""}</td>
+        try { r = await App.get("/api/admin/users?" + qs({ q: $("#uq", el).value, role: $("#urole", el).value, invite: el._invite || "", page })); } catch (e) { return App.fail(e); }
+        $("#ulist", el).innerHTML = r.data.length ? `<div class="table-wrap"><table><tr><th>Логин</th><th>Имя / Telegram</th><th>Роль</th><th>Тариф</th><th>Баланс</th><th>Ссылки</th><th>Статус</th><th>Регистрация</th></tr>
+          ${r.data.map((u) => `<tr class="clickable" data-id="${u.id}"><td><b>${esc(u.login)}</b></td><td>${esc(u.display_name)}${u.username ? ` <span class="hint">@${esc(u.username)}</span>` : ""}${u.tg_id ? ` ${icon("check", "ok")}` : ""}</td>
             <td>${u.role === "admin" ? App.badge("админ") : "пользователь"}</td><td>${esc(u.tariff?.name || "—")}</td><td class="mono">${money(u.balance, 2)}</td>
             <td>${yesNo(u.links_access)}</td><td>${u.is_blocked ? App.badge("заблокирован", "bad") : App.badge("активен", "ok")}</td><td>${fmtDate(u.created_at)}</td></tr>`).join("")}</table></div>
           ${App.pager(r.meta, (p) => { page = p; load(); })}` : `<div class="card soft">${App.empty("users", "Пользователи не найдены")}</div>`;
@@ -460,7 +531,8 @@
       $("#uq", el).oninput = () => { clearTimeout(t); t = setTimeout(() => { page = 1; load(); }, 300); };
       $("#urole", el).onchange = () => { page = 1; load(); };
       $("#uadd", el).onclick = () => App.modal("Новый пользователь", `
-        <form id="nu"><div class="field"><label>Email *</label><input class="input" name="email" type="email" required></div>
+        <form id="nu"><p class="hint">Обычно люди регистрируются сами по <a class="link-btn" href="#/a-invites">ссылке-приглашению</a>. Здесь можно создать аккаунт вручную.</p>
+          <div class="field"><label>Логин *</label><input class="input" name="login" required autocapitalize="none" placeholder="латиница, цифры, _ . -"></div>
           <div class="field"><label>Пароль * (мин. 8 символов)</label><input class="input" name="password" minlength="8" required></div>
           <div class="field"><label>Telegram</label><input class="input" name="username"></div>
           <div class="field"><label>Роль</label><select class="input" name="role"><option value="user">Пользователь</option><option value="admin">Администратор</option></select></div>
@@ -475,13 +547,14 @@
     let u;
     try { u = await App.get(`/api/admin/users/${id}`); } catch (e) { return App.fail(e); }
     const tariffs = await loadTariffs();
-    App.modal(u.email, `
+    App.modal(u.login, `
       <div class="grid g3 mb small">
         <div><span class="hint">Заявок</span><br><a class="link-btn" href="#/a-conversions/user=${u.id}">${u.conversions}</a></div>
-        <div><span class="hint">Ссылок</span><br>${u.links}</div></div>
+        <div><span class="hint">Ссылок</span><br>${u.links}</div>
+        <div><span class="hint">Telegram</span><br>${u.tg_id ? `${icon("check", "ok")} подтверждён${u.chat_id ? "" : " (уведомления выкл.)"}` : "не привязан"}</div></div>
       <form id="ue">
         <div class="grid g2">
-          <div class="field"><label>Email</label><input class="input" name="email" value="${esc(u.email)}"></div>
+          <div class="field"><label>Логин</label><input class="input" name="login" value="${esc(u.login)}"></div>
           <div class="field"><label>Отображаемое имя</label><input class="input" name="display_name" value="${esc(u.display_name)}"></div>
           <div class="field"><label>Telegram</label><input class="input" name="username" value="${esc(u.username)}"></div>
           <div class="field"><label>Роль</label><select class="input" name="role"><option value="user">Пользователь</option><option value="admin" ${u.role === "admin" ? "selected" : ""}>Администратор</option></select></div>
@@ -498,7 +571,7 @@
         <div class="row mt"><input class="input flex1" name="amount" type="number" step="0.01" placeholder="+100 или -50" required><input class="input flex2" name="note" placeholder="Комментарий"><button class="btn" type="submit">Изменить</button></div>
         <div class="form-error"></div></form>
       <hr>
-      <form id="up"><b>Новый пароль</b><div class="row mt"><input class="input flex1" name="password" minlength="8" placeholder="Минимум 8 символов" required><button class="btn" type="submit">Установить</button></div>
+      <form id="up"><b>Новый пароль</b><p class="hint m0">Если человек забыл пароль — задайте новый и сообщите ему.</p><div class="row mt"><input class="input flex1" name="password" minlength="8" placeholder="Минимум 8 символов" required><button class="btn" type="submit">Установить</button></div>
         <div class="form-error"></div></form>
       ${u.sessions.length ? `<hr><b>Сессии</b>${u.sessions.map((s) => `<div class="hint">${esc(s.ip)} · ${fmtDateTime(s.last_active)}</div>`).join("")}` : ""}
       <hr><button class="btn sm danger" id="udel">${icon("trash")}Удалить пользователя</button>`,
@@ -510,7 +583,7 @@
       App.onSubmit($("#ub", m), async (d) => { await App.post(`/api/admin/users/${id}/balance`, d); App.toast("Баланс изменён"); close(); reload(); });
       App.onSubmit($("#up", m), async (d, f) => { await App.post(`/api/admin/users/${id}/password`, d); f.reset(); App.toast("Пароль установлен, сессии пользователя завершены"); });
       $("#udel", m).onclick = async () => {
-        if (!(await App.confirm(`Удалить ${u.email} вместе со всеми заявками, ссылками и покупками?`, "Удалить"))) return;
+        if (!(await App.confirm(`Удалить ${u.login} вместе со всеми заявками, ссылками и покупками?`, "Удалить"))) return;
         try { await App.del(`/api/admin/users/${id}`); close(); App.toast("Удалено"); reload(); } catch (e) { App.fail(e); }
       };
     }, { wide: true });
@@ -522,7 +595,7 @@
     async render(el) {
       el.innerHTML = `${App.pageHead("link", "Ссылки", "Персональные ссылки пользователей. Пока партнёрский API не подключён, адрес оффера вписывается здесь вручную.")}
         <div class="row mb"><select class="input wauto" id="lst"><option value="requested">Ждут выдачи</option><option value="active">Активные</option><option value="disabled">Отключённые</option><option value="">Все</option></select>
-          <div class="input-icon w280">${icon("search")}<input class="input" id="lq" placeholder="Email или Telegram"></div></div>
+          <div class="input-icon w280">${icon("search")}<input class="input" id="lq" placeholder="Логин или Telegram"></div></div>
         <div id="llist">${App.loading()}</div>`;
     },
     mount(el) {
@@ -532,12 +605,12 @@
         let r;
         try { r = await App.get("/api/admin/links?" + qs({ status: $("#lst", el).value, q: $("#lq", el).value, page })); } catch (e) { return App.fail(e); }
         $("#llist", el).innerHTML = r.data.length ? `<div class="table-wrap"><table><tr><th>Пользователь</th><th>Оффер</th><th>Статус</th><th>Адрес оффера</th><th>Переходы</th><th>Заявки</th><th>Создана</th></tr>
-          ${r.data.map((l) => `<tr class="clickable" data-id="${l.id}"><td>${esc(l.user.email)}</td><td>${esc(l.offer_name)}</td><td>${App.badge(st[l.status], App.statusTone(l.status))}</td>
+          ${r.data.map((l) => `<tr class="clickable" data-id="${l.id}"><td>${esc(l.user.login)}</td><td>${esc(l.offer_name)}</td><td>${App.badge(st[l.status], App.statusTone(l.status))}</td>
             <td class="mono clip1">${esc(l.target_url || "—")}</td><td>${l.clicks}</td><td>${l.used}${l.limit ? "/" + l.limit : ""}</td><td>${fmtDate(l.created_at)}</td></tr>`).join("")}</table></div>
           ${App.pager(r.meta, (p) => { page = p; load(); })}` : `<div class="card soft">${App.empty("link", "Ссылок нет")}</div>`;
         $$("tr.clickable", el).forEach((tr) => tr.onclick = () => {
           const l = r.data.find((x) => x.id === +tr.dataset.id);
-          App.modal("Ссылка", `<p><b>${esc(l.user.email)}</b> → ${esc(l.offer_name)}</p>
+          App.modal("Ссылка", `<p><b>${esc(l.user.login)}</b> → ${esc(l.offer_name)}</p>
             ${l.url ? `<p class="hint">Ссылка для пользователя: <span class="mono">${esc(l.url)}</span></p>` : ""}
             <form id="le"><div class="field"><label>Адрес оффера (куда ведёт редирект)</label><input class="input" name="url" type="url" placeholder="https://" value="${esc(l.target_url)}"></div>
               <div class="grid g2"><div class="field"><label>Статус</label><select class="input" name="status">${Object.entries(st).map(([k, v]) => `<option value="${k}" ${k === l.status ? "selected" : ""}>${v}</option>`).join("")}</select></div>
@@ -572,7 +645,7 @@
           <div class="row"><div class="input-icon flex2">${icon("search")}<input class="input" name="q" placeholder="ИНН, ФИО, телефон" value="${esc(p.q || "")}"></div>
             <select class="input flex1" name="status"><option value="">Все статусы</option>${Object.entries(st).map(([k, v]) => `<option value="${k}" ${p.status === k ? "selected" : ""}>${esc(v)}</option>`).join("")}</select>
             <select class="input flex1" name="offer"><option value="">Все офферы</option>${offers.map((o) => `<option value="${o.id}">${esc(o.name)}</option>`).join("")}</select>
-            <select class="input flex1" name="user"><option value="">Все пользователи</option>${users.data.map((u) => `<option value="${u.id}" ${+p.user === u.id ? "selected" : ""}>${esc(u.email)}</option>`).join("")}</select></div>
+            <select class="input flex1" name="user"><option value="">Все пользователи</option>${users.data.map((u) => `<option value="${u.id}" ${+p.user === u.id ? "selected" : ""}>${esc(u.login)}</option>`).join("")}</select></div>
           <div class="row mt"><span>С</span><input class="input wauto" type="date" name="from"><span>по</span><input class="input wauto" type="date" name="to">
             <span class="spacer"></span><a class="btn sm" id="ccsv">${icon("download")}CSV</a><button type="button" class="btn sm primary" id="cadd">${icon("plus")}Добавить</button></div>
         </form>
@@ -587,13 +660,13 @@
       const params = () => qs({ ...Object.fromEntries(new FormData(form)), page });
       const syncBulk = () => { $("#bulk", el).hidden = !selected.size; $("#bcount", el).textContent = `Выбрано: ${selected.size}`; };
       const load = async () => {
-        $("#ccsv", el).href = "/api/admin/conversions.csv?" + params();
+        $("#ccsv", el).href = "api/admin/conversions.csv?" + params();
         let r;
         try { r = await App.get("/api/admin/conversions?" + params()); } catch (e) { return App.fail(e); }
         rows = r.data; selected.clear(); syncBulk();
         $("#clist", el).innerHTML = rows.length ? `<div class="table-wrap"><table><tr><th><input type="checkbox" id="call"></th><th>#</th><th>Дата</th><th>Пользователь</th><th>Оффер</th><th>ИНН</th><th>ФИО</th><th>Статус</th><th>Сумма</th><th>Источник</th></tr>
           ${rows.map((c) => `<tr class="clickable" data-id="${c.id}"><td><input type="checkbox" data-sel="${c.id}"></td><td>${c.id}</td><td>${fmtDate(c.created_at)}</td>
-            <td>${esc(c.user.email)}</td><td>${esc(c.offer_name)}</td><td class="mono">${esc(c.inn)}</td><td>${esc(c.fio)}</td>
+            <td>${esc(c.user.login)}</td><td>${esc(c.offer_name)}</td><td class="mono">${esc(c.inn)}</td><td>${esc(c.fio)}</td>
             <td>${App.badge(c.status_name, App.statusTone(c.status))}</td><td class="mono">${money(c.amount)}</td><td class="hint">${{ manual: "кабинет", form: "форма", admin: "админ" }[c.source] || c.source}</td></tr>`).join("")}</table></div>
           ${App.pager(r.meta, (p) => { page = p; load(); })}` : `<div class="card soft">${App.empty("file", "Заявок не найдено")}</div>`;
         $$("[data-sel]", el).forEach((c) => c.onclick = (e) => { e.stopPropagation(); c.checked ? selected.add(+c.dataset.sel) : selected.delete(+c.dataset.sel); syncBulk(); });
@@ -601,7 +674,7 @@
         $$("tr.clickable", el).forEach((tr) => tr.onclick = (e) => { if (e.target.closest("input")) return; edit(rows.find((x) => x.id === +tr.dataset.id)); });
       };
       const edit = (c) => App.modal(`Заявка #${c.id}`, `
-        <p class="small">${esc(c.user.email)} · ${esc(c.offer_name)} · создана ${fmtDateTime(c.created_at)}${c.phone ? ` · тел. ${esc(c.phone)}` : ""}${c.subid ? ` · метка ${esc(c.subid)}` : ""}</p>
+        <p class="small">${esc(c.user.login)} · ${esc(c.offer_name)} · создана ${fmtDateTime(c.created_at)}${c.phone ? ` · тел. ${esc(c.phone)}` : ""}${c.subid ? ` · метка ${esc(c.subid)}` : ""}</p>
         <form id="ce"><div class="grid g2">
           <div class="field"><label>ИНН</label><input class="input" name="inn" value="${esc(c.inn)}"></div>
           <div class="field"><label>ФИО</label><input class="input" name="fio" value="${esc(c.fio)}"></div>
@@ -617,7 +690,7 @@
       $("#cadd", el).onclick = () => {
         const { offers, users } = el._data;
         App.modal("Новая заявка", `<form id="cn">
-          <div class="field"><label>Пользователь *</label><select class="input" name="user_id" required>${users.map((u) => `<option value="${u.id}">${esc(u.email)}</option>`).join("")}</select></div>
+          <div class="field"><label>Пользователь *</label><select class="input" name="user_id" required>${users.map((u) => `<option value="${u.id}">${esc(u.login)}</option>`).join("")}</select></div>
           <div class="field"><label>Оффер *</label><select class="input" name="offer_id" required>${offers.map((o) => `<option value="${o.id}">${esc(o.partner)} — ${esc(o.name)}</option>`).join("")}</select></div>
           <div class="grid g2"><div class="field"><label>ИНН *</label><input class="input" name="inn" required></div><div class="field"><label>ФИО</label><input class="input" name="fio"></div>
           <div class="field"><label>Статус</label><select class="input" name="status">${Object.entries(st).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join("")}</select></div>
@@ -652,13 +725,13 @@
         let r;
         try { r = await App.get("/api/admin/topups?" + qs({ status: $("#tst", el).value, page })); } catch (e) { return App.fail(e); }
         $("#tlist", el).innerHTML = r.data.length ? `<div class="table-wrap"><table><tr><th>Дата</th><th>Пользователь</th><th>Сумма</th><th>Комментарий</th><th>Статус</th><th></th></tr>
-          ${r.data.map((t) => `<tr><td>${fmtDateTime(t.created_at)}</td><td>${esc(t.user.email)}</td><td class="mono">${money(t.amount, 2)}</td><td>${esc(t.note)}${t.admin_note ? `<div class="hint">${esc(t.admin_note)}</div>` : ""}</td>
+          ${r.data.map((t) => `<tr><td>${fmtDateTime(t.created_at)}</td><td>${esc(t.user.login)}</td><td class="mono">${money(t.amount, 2)}</td><td>${esc(t.note)}${t.admin_note ? `<div class="hint">${esc(t.admin_note)}</div>` : ""}</td>
             <td>${App.badge(names[t.status], App.statusTone(t.status === "approved" ? "active" : t.status === "rejected" ? "rejected" : "pending"))}</td>
             <td class="nowrap">${t.status === "pending" ? `<button class="btn sm primary" data-ok="${t.id}">Зачислить</button> <button class="btn sm" data-no="${t.id}">Отклонить</button>` : ""}</td></tr>`).join("")}</table></div>
           ${App.pager(r.meta, (p) => { page = p; load(); })}` : `<div class="card soft">${App.empty("card", "Заявок нет")}</div>`;
         $$("[data-ok]", el).forEach((b) => b.onclick = () => {
           const t = r.data.find((x) => x.id === +b.dataset.ok);
-          App.modal("Зачислить пополнение", `<form id="ta"><p>${esc(t.user.email)}</p>
+          App.modal("Зачислить пополнение", `<form id="ta"><p>${esc(t.user.login)}</p>
             <div class="field"><label>Сумма к зачислению, ₽</label><input class="input" name="amount" type="number" step="0.01" min="0.01" value="${t.amount}" required></div>
             <div class="field"><label>Комментарий</label><input class="input" name="note"></div><div class="form-error"></div>
             <div class="row"><button class="btn primary" type="submit">Зачислить</button><button type="button" class="btn" data-close>Отмена</button></div></form>`,
@@ -689,7 +762,7 @@
         let r;
         try { r = await App.get("/api/admin/tickets?" + qs({ status: $("#kst", el).value, page })); } catch (e) { return App.fail(e); }
         $("#klist", el).innerHTML = r.data.length ? `<div class="table-wrap"><table><tr><th>Обновлено</th><th>Пользователь</th><th>Тема</th><th>Тип</th><th>Статус</th></tr>
-          ${r.data.map((t) => `<tr class="clickable" data-id="${t.id}"><td>${fmtDateTime(t.updated_at)}</td><td>${esc(t.user.email)}</td><td><b>${esc(t.subject)}</b></td>
+          ${r.data.map((t) => `<tr class="clickable" data-id="${t.id}"><td>${fmtDateTime(t.updated_at)}</td><td>${esc(t.user.login)}</td><td><b>${esc(t.subject)}</b></td>
             <td>${topics[t.topic] || t.topic}</td><td>${App.badge(names[t.status], App.statusTone(t.status))}</td></tr>`).join("")}</table></div>
           ${App.pager(r.meta, (p) => { page = p; load(); })}` : `<div class="card soft">${App.empty("chat", "Обращений нет")}</div>`;
         $$("tr.clickable", el).forEach((tr) => tr.onclick = () => ticketDialog(+tr.dataset.id, load));
@@ -702,7 +775,7 @@
   async function ticketDialog(id, reload) {
     let t;
     try { t = await App.get(`/api/admin/tickets/${id}`); } catch (e) { return App.fail(e); }
-    App.modal(t.subject, `<p class="small">${esc(t.user.email)}${t.conversion_id ? ` · по заявке #${t.conversion_id}` : ""} · создано ${fmtDateTime(t.created_at)}</p>
+    App.modal(t.subject, `<p class="small">${esc(t.user.login)}${t.conversion_id ? ` · по заявке #${t.conversion_id}` : ""} · создано ${fmtDateTime(t.created_at)}</p>
       ${t.topic === "access" ? `<div class="notice">Заявка на доступ к ссылкам. Откройте доступ в карточке пользователя (раздел «Пользователи») — обращение закроется автоматически.</div>` : ""}
       ${App.messagesHtml(t).replace(/Вы ·/g, "Пользователь ·")}
       <form id="kr" class="mt"><div class="field"><label>Ответ</label><textarea class="input" name="body" rows="4" required></textarea></div>

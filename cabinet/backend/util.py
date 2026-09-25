@@ -1,3 +1,5 @@
+from __future__ import annotations  # Python 3.9 на хостинге
+
 import re
 import secrets
 from datetime import datetime

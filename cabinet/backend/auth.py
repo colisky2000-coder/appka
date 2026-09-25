@@ -1,3 +1,5 @@
+from __future__ import annotations  # Python 3.9 на хостинге
+
 import hashlib
 import os
 import secrets
@@ -47,10 +49,16 @@ def start_session(user):
     return token
 
 
+def cookie_path():
+    # Кабинет может жить в подпапке сайта (/secret/...): cookie только для неё
+    return (request.script_root or "") + "/"
+
+
 def set_cookie(resp, token):
     secure = os.environ.get("COOKIE_SECURE", "auto")
     is_secure = request.is_secure if secure == "auto" else secure == "1"
-    resp.set_cookie(COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="Lax", secure=is_secure, path="/")
+    resp.set_cookie(COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True, samesite="Lax", secure=is_secure,
+                    path=cookie_path())
     return resp
 
 
@@ -110,12 +118,12 @@ _attempts: dict[str, deque] = defaultdict(deque)
 LIMIT, WINDOW = 10, 600
 
 
-def check_rate(key):
+def check_rate(key, limit=LIMIT):
     now = time.time()
     q = _attempts[key]
     while q and q[0] < now - WINDOW:
         q.popleft()
-    if len(q) >= LIMIT:
+    if len(q) >= limit:
         raise ApiError("Слишком много попыток. Попробуйте через 10 минут", 429)
     q.append(now)
 
@@ -125,16 +133,18 @@ def reset_rate(key):
 
 
 def ensure_admin_from_env():
-    email = (os.environ.get("ADMIN_EMAIL") or "").strip().lower()
+    """Первый администратор: ADMIN_LOGIN (или ADMIN_EMAIL) и ADMIN_PASSWORD."""
+    from .services import norm_login
+    login = norm_login(os.environ.get("ADMIN_LOGIN") or os.environ.get("ADMIN_EMAIL"))
     password = os.environ.get("ADMIN_PASSWORD") or ""
-    if not email or not password:
+    if not login or not password:
         return
-    u = db.query(User).filter_by(email=email).first()
+    u = db.query(User).filter_by(login=login).first()
     if u:
         if u.role != "admin":
             u.role = "admin"
     else:
         default = db.query(Tariff).filter_by(is_default=True).first()
-        db.add(User(email=email, password_hash=hash_password(password), role="admin",
+        db.add(User(login=login, password_hash=hash_password(password), role="admin",
                     links_access=True, tariff_id=default.id if default else None))
     db.commit()

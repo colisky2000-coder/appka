@@ -1,4 +1,4 @@
-"""Публичные адреса: редирект по ссылке, вебхук Telegram, обложки, приглашения."""
+"""Публичные адреса: редирект по ссылке, вебхук Telegram, картинки, приглашения."""
 import hashlib
 import hmac
 from datetime import timedelta
@@ -6,10 +6,10 @@ from datetime import timedelta
 from flask import Blueprint, Response, abort, g, redirect, render_template_string, request
 from markupsafe import escape
 
-from . import telegram
+from . import bot, telegram
 from .auth import client_ip, load_user
 from .db import db, utcnow
-from .models import Article, Click, Lesson, Material, OfferLink, Program, Setting, User
+from .models import Article, Click, Lesson, Material, OfferLink, Program, Upload
 
 bp = Blueprint("public", __name__)
 
@@ -43,12 +43,12 @@ def go(code):
 PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ title }}</title>
 <style>
-body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#fafaf8;color:#1c1c1c;display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box}
+body{margin:0;font-family:"Yandex Sans Text",system-ui,-apple-system,sans-serif;background:#fafaf8;color:#1c1c1c;display:grid;place-items:center;min-height:100vh;padding:16px;box-sizing:border-box}
 .card{background:#fff;border:1px solid #2a2a2a;border-radius:14px;padding:24px;width:100%;max-width:420px;box-sizing:border-box}
 h1{font-size:20px;margin:0 0 4px}.muted{color:#7a7a7a}.small{font-size:12px}
 label{display:flex;flex-direction:column;gap:6px;font-size:12px;color:#7a7a7a;margin:14px 0}
 input{font:inherit;font-size:15px;color:#1c1c1c;padding:10px 12px;border:1px solid #2a2a2a;border-radius:8px}
-button{width:100%;padding:12px;border:0;border-radius:8px;background:#8a6420;color:#fff;font:inherit;font-weight:600;cursor:pointer;margin-top:6px}
+button{width:100%;padding:12px;border:0;border-radius:8px;background:#e0212b;color:#fff;font:inherit;font-weight:600;cursor:pointer;margin-top:6px}
 .err{background:#fdf1f1;color:#d23b3b;border:1px solid #f3c7c7;border-radius:8px;padding:10px;margin-top:12px}
 .hp{position:absolute;left:-9999px}
 </style></head><body>{{ content|safe }}</body></html>"""
@@ -61,25 +61,10 @@ def render_page(title, content_html):
 
 @bp.post("/tg/webhook")
 def tg_webhook():
-    row = db.get(Setting, telegram.SECRET_KEY)
     got = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    if not row or not hmac.compare_digest(row.value, got):
+    if not telegram.enabled() or not hmac.compare_digest(telegram.webhook_secret(), got):
         abort(403)
-    msg = (request.get_json(silent=True) or {}).get("message") or {}
-    text = (msg.get("text") or "").strip()
-    chat_id = str((msg.get("chat") or {}).get("id") or "")
-    if chat_id and text.startswith("/start"):
-        parts = text.split(maxsplit=1)
-        code = parts[1].strip() if len(parts) > 1 else ""
-        user = db.query(User).filter_by(tg_link_code=code).first() if code else None
-        if user:
-            user.chat_id, user.tg_link_code = chat_id, ""
-            if not user.username and (msg.get("from") or {}).get("username"):
-                user.username = msg["from"]["username"]
-            db.commit()
-            telegram.send(chat_id, "Telegram привязан к кабинету. Сюда будут приходить уведомления.")
-        else:
-            telegram.send(chat_id, "Чтобы привязать Telegram, нажмите «Привязать» в профиле личного кабинета.")
+    bot.handle_update(request.get_json(silent=True) or {})
     return {"ok": True}
 
 
@@ -100,6 +85,16 @@ def cover(kind, oid):
                     headers={"Cache-Control": "private, max-age=31536000, immutable"})
 
 
+@bp.get("/media/u/<key>")
+def upload(key):
+    """Картинки из текста уроков и статей — только для вошедших, как и сам текст."""
+    load_user()
+    obj = db.query(Upload).filter_by(key=key).first() if g.user else None
+    if not obj or not obj.data:
+        abort(404)
+    return Response(obj.data, mimetype=obj.mime, headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
 @bp.get("/join/<code>")
 def join(code):
-    return redirect(f"/#/join/{code}", code=302)
+    return redirect(f"{request.script_root}/#/join/{code}", code=302)

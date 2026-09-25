@@ -1,14 +1,15 @@
 """Общая бизнес-логика и сериализация, используется кабинетом и админкой."""
 import os
+import re
 from datetime import timedelta
 
 from flask import request
-from sqlalchemy import func, update
+from sqlalchemy import func, or_, update
 
 from . import features, partner_api, telegram
 from .db import db, utcnow
 from .models import (
-    CONVERSION_STATUSES, BalanceTx, Conversion, Offer, OfferLink, Tariff, User,
+    CONVERSION_STATUSES, BalanceTx, Conversion, Invite, OfferLink, Tariff, User,
 )
 from .util import ApiError, iso, new_code, rub
 
@@ -23,12 +24,86 @@ def payout_for(offer, user):
 
 
 def public_name(user):
-    return user.display_name or (("@" + user.username.lstrip("@")) if user.username else user.email.split("@")[0])
+    return user.display_name or (("@" + user.username.lstrip("@")) if user.username else user.login.split("@")[0])
+
+
+# ---------- логин ----------
+LOGIN_RE = re.compile(r"^[a-z0-9_.-]{3,32}$")
+
+
+def norm_login(value):
+    """«@Ivan » -> «ivan». У старых аккаунтов логин — email, его не трогаем."""
+    v = str(value or "").strip().lower()
+    if v.startswith("@") and v.count("@") == 1:
+        v = v[1:]
+    return v
+
+
+def login_taken(login, exclude_id=None):
+    q = db.query(User.id).filter(User.login == login)
+    if exclude_id:
+        q = q.filter(User.id != exclude_id)
+    return q.first() is not None
+
+
+def clean_login(value, exclude_id=None):
+    v = norm_login(value)
+    if not LOGIN_RE.match(v):
+        raise ApiError("Логин: от 3 до 32 символов — латинские буквы, цифры, точка, дефис или подчёркивание")
+    if login_taken(v, exclude_id):
+        raise ApiError("Такой логин уже занят — придумайте другой")
+    return v
+
+
+def suggest_login(tg_username):
+    """Логин по умолчанию — username из Telegram, если он подходит и свободен."""
+    v = norm_login(tg_username)
+    return v if LOGIN_RE.match(v) and not login_taken(v) else ""
+
+
+# ---------- приглашения ----------
+def invite_usable(inv):
+    return bool(inv and inv.is_active and inv.tariff
+                and (not inv.max_uses or inv.uses < inv.max_uses)
+                and (not inv.expires_at or inv.expires_at > utcnow()))
+
+
+def get_invite(code):
+    code = str(code or "").strip()
+    inv = db.query(Invite).filter_by(code=code).first() if code else None
+    if not invite_usable(inv):
+        raise ApiError("Ссылка-приглашение недействительна или закончилась. Попросите у администратора новую", 404)
+    return inv
+
+
+def use_invite(user, inv):
+    """Переводит пользователя на тариф приглашения и засчитывает использование ссылки."""
+    res = db.execute(update(Invite)
+                     .where(Invite.id == inv.id, or_(Invite.max_uses == 0, Invite.uses < Invite.max_uses))
+                     .values(uses=Invite.uses + 1))
+    if res.rowcount != 1:
+        raise ApiError("Лимит регистраций по этой ссылке исчерпан")
+    user.tariff_id = inv.tariff_id
+    user.tariff_until = utcnow() + timedelta(days=inv.days) if inv.days else None
+    user.invite_id = inv.id
+
+
+def invite_url(inv):
+    return f"{public_base()}/join/{inv.code}"
+
+
+def ser_invite(inv):
+    return {"id": inv.id, "code": inv.code, "url": invite_url(inv), "tariff_id": inv.tariff_id,
+            "tariff": inv.tariff.name if inv.tariff else "—", "title": inv.title, "max_uses": inv.max_uses,
+            "uses": inv.uses, "days": inv.days, "expires_at": iso(inv.expires_at), "is_active": inv.is_active,
+            # последний день, когда ссылка работает (в базе хранится начало следующего дня)
+            "expires_on": (inv.expires_at - timedelta(days=1)).date().isoformat() if inv.expires_at else "",
+            "usable": invite_usable(inv), "created_at": iso(inv.created_at)}
 
 
 def ser_user(u, admin=False):
     d = {
-        "id": u.id, "email": u.email, "username": u.username, "display_name": u.display_name,
+        "id": u.id, "login": u.login, "username": u.username, "display_name": u.display_name,
         "name": public_name(u), "role": u.role, "balance": rub(u.balance),
         "tariff": ser_tariff(u.tariff) if u.tariff else None, "tariff_until": iso(u.tariff_until),
         "links_access": u.links_access, "telegram_linked": bool(u.chat_id),
@@ -37,7 +112,7 @@ def ser_user(u, admin=False):
         "program_id": u.tariff.program_id if u.tariff else None,
     }
     if admin:
-        d.update(is_blocked=u.is_blocked, admin_note=u.admin_note, chat_id=u.chat_id)
+        d.update(is_blocked=u.is_blocked, admin_note=u.admin_note, chat_id=u.chat_id, tg_id=u.tg_id, invite_id=u.invite_id)
     return d
 
 
@@ -67,7 +142,8 @@ def change_balance(user_id, amount, kind, note="", require_funds=True):
 
 # ---------- ссылки ----------
 def public_base():
-    return (os.environ.get("PUBLIC_URL") or request.host_url).rstrip("/")
+    # url_root учитывает подпапку (https://site.ru/secret/), host_url — нет
+    return (os.environ.get("PUBLIC_URL") or request.url_root).rstrip("/")
 
 
 def tracked_url(link):
@@ -122,7 +198,7 @@ def ser_conversion(c, admin=False):
          "comment": c.comment, "source": c.source,
          "created_at": iso(c.created_at), "status_changed_at": iso(c.status_changed_at)}
     if admin:
-        d["user"] = {"id": c.user.id, "email": c.user.email, "name": public_name(c.user)}
+        d["user"] = {"id": c.user.id, "login": c.user.login, "name": public_name(c.user)}
     return d
 
 

@@ -13,13 +13,14 @@ python -m pytest -q                                                             
 TEST_DATABASE_URL=postgresql://... python -m pytest -q                              # тесты на Postgres
 ```
 - Windows: двойной клик `cabinet/start.bat` (вход `admin@site.ru` / `admin12345`).
-- Переменные окружения — в `cabinet/.env.example`.
+- Переменные окружения — в `cabinet/.env.example`; файл `cabinet/.env` подхватывается при запуске.
 
 ## Всегда
 - Перед задачей читать `memory/gotchas.md` и `memory/decisions.md`.
 - Деньги хранить в копейках (int), наружу отдавать через `rub()` / принимать через `to_kop()`.
 - Новые колонки — только добавлением в `backend/models.py`: их создаёт `auto_migrate` при старте.
 - Изменяющие запросы к `/api/` фронтенд шлёт с заголовком `X-Requested-With: fetch` (иначе 400).
+- Во фронтенде и в адресах, которые отдаёт сервер, — только относительные пути (`api/...`, `static/...`, `media/...`): кабинет может работать в подпапке сайта (`URL_PREFIX`, выкладка на Sprinthost — `cabinet/deploy/SPRINTHOST.md`).
 - Перед коммитом: `python -m pytest -q` в `cabinet/` зелёный.
 - Тексты интерфейса — на русском.
 

@@ -46,17 +46,22 @@ class Tariff(Base):
     # Пустая строка — «не настроено»: действуют разделы по умолчанию.
     features: Mapped[str] = mapped_column(Text, default="")
     program_id: Mapped[Optional[int]] = mapped_column(ForeignKey("programs.id", ondelete="SET NULL"), nullable=True)
+    # Устаревшие поля (одна ссылка на тариф) — теперь ссылки в таблице invites.
+    # Остаются в модели: в старых базах это NOT NULL без значения по умолчанию.
     invite_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     invite_code: Mapped[str] = mapped_column(String(40), default="", index=True)
-    invite_days: Mapped[int] = mapped_column(Integer, default=0)  # срок доступа по приглашению, 0 — бессрочно
+    invite_days: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    # Логин для входа. Колонка в базе называется email: у старых аккаунтов логин — это их email.
+    login: Mapped[str] = mapped_column("email", String(255), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     username: Mapped[str] = mapped_column(String(64), default="")  # Telegram @username
+    tg_id: Mapped[str] = mapped_column(String(32), default="", index=True)  # id в Telegram, подтверждён кодом
+    invite_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # по какой ссылке пришёл
     display_name: Mapped[str] = mapped_column(String(120), default="")
     role: Mapped[str] = mapped_column(String(16), default="user")  # user | admin
     tariff_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tariffs.id", ondelete="SET NULL"), nullable=True)
@@ -76,6 +81,52 @@ class User(Base):
     @property
     def is_admin(self):
         return self.role == "admin"
+
+
+class Invite(Base):
+    """Ссылка-приглашение /join/<code>: регистрация сразу на тариф. Без неё зарегистрироваться нельзя."""
+    __tablename__ = "invites"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    tariff_id: Mapped[int] = mapped_column(ForeignKey("tariffs.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200), default="")  # заметка админа: для кого ссылка
+    max_uses: Mapped[int] = mapped_column(Integer, default=0)  # 0 — без лимита
+    uses: Mapped[int] = mapped_column(Integer, default=0)
+    days: Mapped[int] = mapped_column(Integer, default=0)  # срок доступа к тарифу, 0 — бессрочно
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # ссылка работает до
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+    tariff: Mapped[Tariff] = relationship()
+
+
+class TgSignup(Base):
+    """Регистрация: код из Telegram-бота подтверждает, что человек владеет аккаунтом Telegram."""
+    __tablename__ = "tg_signups"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    invite_id: Mapped[int] = mapped_column(Integer)
+    chat_id: Mapped[str] = mapped_column(String(32), default="")
+    tg_id: Mapped[str] = mapped_column(String(32), default="")
+    tg_username: Mapped[str] = mapped_column(String(64), default="")
+    tg_name: Mapped[str] = mapped_column(String(120), default="")
+    code_hash: Mapped[str] = mapped_column(String(64), default="")
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    used: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Upload(Base):
+    """Картинки, вставленные в текст уроков и статей (хранятся в базе, как и обложки)."""
+    __tablename__ = "uploads"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    key: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    mime: Mapped[str] = mapped_column(String(60), default="")
+    size: Mapped[int] = mapped_column(Integer, default=0)
+    data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
 class UserSession(Base):
@@ -119,6 +170,8 @@ class OfferLink(Base):
     code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
     url: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="requested")  # requested | active | disabled
+    # Устаревшее поле (публичная форма удалена). Остаётся: в старых базах NOT NULL без значения по умолчанию.
+    form_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     limit: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

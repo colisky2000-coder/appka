@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import media  # noqa: E402
 from test_api import H, app, client, login, post, register  # noqa: E402,F401
+from test_api import SENT, last_code, make_invite, signup  # noqa: E402,F401
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
@@ -16,41 +17,37 @@ def intensive(admin):
     return next(t for t in admin.get("/api/admin/r/tariffs").json["data"] if t["code"] == "intensive")
 
 
+def intensive_invite(admin):
+    t = intensive(admin)
+    return admin.get(f"/api/admin/invites?tariff={t['id']}").json["data"][0]
+
+
 def test_intensive_seeded_and_invite(app):
     admin = login(app, "admin@test.ru", "adminpass123")
     t = intensive(admin)
-    assert t["features"] == ["learning", "support"] and t["program_id"] and t["invite_enabled"]
-    # Регистрация по приглашению работает даже при закрытой регистрации
-    admin.put("/api/admin/settings", json={"allow_registration": False}, headers=H)
-    c = client(app)
-    assert c.get(f"/api/invite/{t['invite_code']}").json["data"]["tariff"] == "Интенсив"
-    r = post(c, "/api/auth/register", {"email": "st@test.ru", "password": "student123", "invite": t["invite_code"]})
-    assert r.status_code == 200, r.json
+    assert t["features"] == ["learning", "support"] and t["program_id"] and t["invites"] == 1
+    code = intensive_invite(admin)["code"]
+    assert client(app).get(f"/api/invite/{code}").json["data"]["tariff"] == "Интенсив"
+    c = register(app, "student", invite=code)
     me = c.get("/api/me").json["data"]
     assert me["tariff"]["code"] == "intensive" and me["features"] == ["learning", "support"]
     assert c.get("/api/dashboard").status_code == 403
     assert c.get("/api/offers").status_code == 403
     assert c.get("/api/learn").status_code == 200
-    assert client(app).get(f"/join/{t['invite_code']}").headers["Location"].endswith(f"/#/join/{t['invite_code']}")
-    # Перевыпуск кода — старая ссылка перестаёт работать
-    post(admin, f"/api/admin/tariffs/{t['id']}/invite")
-    assert client(app).get(f"/api/invite/{t['invite_code']}").status_code == 404
+    assert client(app).get(f"/join/{code}").headers["Location"].endswith(f"/#/join/{code}")
 
 
 def test_invite_activates_for_existing_user(app):
     admin = login(app, "admin@test.ru", "adminpass123")
-    t = intensive(admin)
-    admin.put(f"/api/admin/r/tariffs/{t['id']}", json={"invite_days": 30}, headers=H)
+    inv = intensive_invite(admin)
+    admin.patch(f"/api/admin/invites/{inv['id']}", json={"days": 30}, headers=H)
     u = register(app)
-    me = post(u, f"/api/invite/{t['invite_code']}/activate").json["data"]
+    me = post(u, f"/api/invite/{inv['code']}/activate").json["data"]
     assert me["tariff"]["code"] == "intensive" and me["tariff_until"]
 
 
 def student(app, admin):
-    t = intensive(admin)
-    c = client(app)
-    post(c, "/api/auth/register", {"email": "st@test.ru", "password": "student123", "invite": t["invite_code"]})
-    return c
+    return register(app, "student", tg_id=600, username="student", invite=intensive_invite(admin)["code"])
 
 
 def test_roadmap_progress(app):
@@ -108,10 +105,9 @@ def test_admin_builds_program(app):
 
     # Тариф с этой программой и только обучением
     tid = post(admin, "/api/admin/r/tariffs", {"code": "mentor", "name": "Наставничество", "features": ["learning"],
-                                               "program_id": pid, "invite_enabled": True}).json["data"]["id"]
-    code = next(t for t in admin.get("/api/admin/r/tariffs").json["data"] if t["id"] == tid)["invite_code"]
-    c = client(app)
-    post(c, "/api/auth/register", {"email": "m@test.ru", "password": "student123", "invite": code})
+                                               "program_id": pid}).json["data"]["id"]
+    code = post(admin, "/api/admin/invites", {"tariff_id": tid}).json["data"]["code"]
+    c = register(app, "mentee", tg_id=601, invite=code)
     d = c.get("/api/learn").json["data"]
     assert d["program"]["title"] == "Наставничество" and len(d["lessons"]) == 1
     les = c.get(f"/api/lessons/{lid}").json["data"]
@@ -158,11 +154,11 @@ def test_covers(app, monkeypatch):
                    data={"file": (io.BytesIO(PNG), "c.png")})
     assert r.status_code == 200, r.json
     link = r.json["data"]["cover"]
-    assert link.startswith(f"/media/articles/{aid}/cover")
+    assert link.startswith(f"media/articles/{aid}/cover")  # относительный: сайт может быть в подпапке
     u = register(app)
-    img = u.get(link)
+    img = u.get("/" + link)
     assert img.status_code == 200 and img.data == PNG and img.mimetype == "image/png"
-    assert client(app).get(link).status_code == 404  # без входа не отдаём
+    assert client(app).get("/" + link).status_code == 404  # без входа не отдаём
     assert admin.post(f"/api/admin/cover/articles/{aid}", headers=H, content_type="multipart/form-data",
                       data={"file": (io.BytesIO(b"not image"), "c.png")}).status_code == 400
 
@@ -177,7 +173,7 @@ def test_covers(app, monkeypatch):
     monkeypatch.setattr(media, "fetch", fake_fetch)
     r = post(admin, f"/api/admin/cover/articles/{aid}", {"auto": True})
     assert r.status_code == 200, r.json
-    assert u.get(r.json["data"]["cover"]).data == PNG
+    assert u.get("/" + r.json["data"]["cover"]).data == PNG
 
     # Если картинку не скачать — остаётся внешняя ссылка
     def broken(url, max_bytes, timeout=10):
@@ -200,3 +196,65 @@ def test_media_helpers():
     assert media.find_preview_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
     with pytest.raises(media.ApiError):
         media.fetch("http://127.0.0.1/secret", 100)
+
+
+def test_rich_text_lesson(app):
+    admin = login(app, "admin@test.ru", "adminpass123")
+    pid = intensive(admin)["program_id"]
+    # Картинка для текста: файл и «битый» файл
+    r = admin.post("/api/admin/uploads", headers=H, content_type="multipart/form-data", data={"file": (io.BytesIO(PNG), "a.png")})
+    assert r.status_code == 200, r.json
+    src = r.json["data"]["url"]
+    assert src.startswith("media/u/")
+    assert admin.post("/api/admin/uploads", headers=H, content_type="multipart/form-data",
+                      data={"file": (io.BytesIO(b"nope"), "a.png")}).status_code == 400
+    # Видео: ссылка -> плеер без автозапуска
+    r = post(admin, "/api/admin/embed", {"url": "https://youtu.be/dQw4w9WgXcQ"})
+    assert r.json["data"]["src"] == "https://www.youtube.com/embed/dQw4w9WgXcQ?rel=0"
+    assert post(admin, "/api/admin/embed", {"url": "https://example.com/v.mp4"}).status_code == 400
+
+    body = (f'<h1 style="color:red">Заголовок</h1><p onclick="x()">Текст <strong>жирный</strong><script>alert(1)</script></p>'
+            f'<p><img src="{src}" onerror="alert(1)"></p><figure class="embed"><iframe src="{r.json and "https://www.youtube.com/embed/dQw4w9WgXcQ?rel=0"}"></iframe></figure>'
+            f'<p><a href="javascript:alert(1)">плохая</a> <a href="https://ya.ru">хорошая</a></p>')
+    r = post(admin, "/api/admin/r/lessons", {"program_id": pid, "title": "HTML-урок", "body": body})
+    assert r.status_code == 200, r.json
+    saved = r.json["data"]["body"]
+    assert "<h2>Заголовок</h2>" in saved and "<b>жирный</b>" in saved
+    for bad in ("script", "onclick", "onerror", "style=", "javascript:"):
+        assert bad not in saved
+    assert f'<img src="{src}"' in saved and '<iframe src="https://www.youtube.com/embed/' in saved
+    assert 'href="https://ya.ru" target="_blank"' in saved
+
+    s = student(app, admin)
+    lesson = s.get(f"/api/lessons/{r.json['data']['id']}").json["data"]
+    assert lesson["body"] == saved
+    assert s.get("/" + src).data == PNG
+    assert client(app).get("/" + src).status_code == 404  # картинки — только для вошедших
+    # Старый текст в простом формате не превращается в HTML
+    lid = post(admin, "/api/admin/r/lessons", {"program_id": pid, "title": "Старый", "body": "# Заголовок\n- пункт"}).json["data"]["id"]
+    assert s.get(f"/api/lessons/{lid}").json["data"]["body"] == "# Заголовок\n- пункт"
+
+
+def test_works_under_url_prefix(app, monkeypatch):
+    from backend import create_app
+    monkeypatch.setenv("URL_PREFIX", "/secretpath")
+    app2 = create_app("sqlite://")
+    c = app2.test_client()
+    r = c.get("/secretpath")
+    assert r.status_code in (301, 308) and r.headers["Location"].endswith("/secretpath/")
+    page = c.get("/secretpath/").data.decode()
+    assert 'src="static/js/core.js?v=' in page and "__V__" not in page
+    assert c.get("/secretpath/api/config").status_code == 200
+    assert c.get("/secretpath/static/styles.css").status_code == 200
+    r = c.post("/secretpath/api/auth/login", json={"login": "admin@test.ru", "password": "adminpass123"}, headers=H)
+    assert r.status_code == 200
+    assert "Path=/secretpath/" in r.headers["Set-Cookie"]
+    assert c.get("/secretpath/api/me").status_code == 200
+    assert c.get("/secretpath/join/abc").headers["Location"].endswith("/secretpath/#/join/abc")
+    admin = c
+    t = admin.get("/secretpath/api/admin/r/tariffs").json["data"][0]
+    inv = admin.post("/secretpath/api/admin/invites", json={"tariff_id": t["id"]}, headers=H).json["data"]
+    assert inv["url"] == f"http://localhost/secretpath/join/{inv['code']}"
+    assert r.headers["X-Robots-Tag"] == "noindex, nofollow"
+    # Passenger с PassengerBaseURI сам передаёт подпапку в SCRIPT_NAME — так тоже работает
+    assert c.get("/api/config", environ_overrides={"SCRIPT_NAME": "/secretpath"}).status_code == 200

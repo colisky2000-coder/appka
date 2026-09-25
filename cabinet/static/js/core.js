@@ -4,6 +4,8 @@ window.App = (() => {
 
   // ---------- API ----------
   async function api(method, url, data, { form } = {}) {
+    // Адреса относительные («api/...»): кабинет может жить в подпапке сайта
+    url = url.replace(/^\//, "");
     const opts = { method, credentials: "same-origin", headers: { "X-Requested-With": "fetch" } };
     if (form) opts.body = form;
     else if (data !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(data); }
@@ -12,7 +14,7 @@ window.App = (() => {
     catch { throw new Error("Нет связи с сервером"); }
     let json = {};
     try { json = await res.json(); } catch { /* не JSON */ }
-    if (res.status === 401 && !url.startsWith("/api/auth/")) {
+    if (res.status === 401 && !url.startsWith("api/auth/")) {
       App.me = null; showAuth(); throw new Error(json.error || "Требуется вход");
     }
     if (!res.ok || json.ok === false) throw new Error(json.error || `Ошибка ${res.status}`);
@@ -58,12 +60,14 @@ window.App = (() => {
     }
     return html + (list ? "</ul>" : "");
   };
+  // Текст урока/статьи: HTML из визуального редактора (сервер его уже очистил) или старый простой формат
+  const rich = (body) => /^\s*</.test(body || "") ? body : md(body);
   // Превью: картинка или заглушка с первой буквой
   const cover = (url, title, cls = "") => url
     ? `<div class="cover ${cls}"><img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>`
     : `<div class="cover ph ${cls}"><span>${esc((String(title || "").replace(/^@/, "")[0] || "•").toUpperCase())}</span></div>`;
   const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== "" && v != null && v !== false)).toString();
-  Object.assign(App, { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, ago, nl2br, linkify, qs, initial, md, cover });
+  Object.assign(App, { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, ago, nl2br, linkify, qs, initial, md, rich, cover });
 
   // ---------- иконки ----------
   const ICONS = {
@@ -124,6 +128,18 @@ window.App = (() => {
     down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
     image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
     eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+    undo: '<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>',
+    redo: '<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>',
+    bold: '<path d="M7 5h6a3.5 3.5 0 0 1 0 7H7zM7 12h7a3.5 3.5 0 0 1 0 7H7z"/>',
+    italic: '<path d="M11 5h7M6 19h7M14 5l-4 14"/>',
+    underline: '<path d="M7 4v7a5 5 0 0 0 10 0V4M5 20h14"/>',
+    strike: '<path d="M4 12h16M16 6.5A4 3 0 0 0 12 5c-2.5 0-4 1.3-4 3 0 1.4 1 2.4 3 3M8 17.5A4 3 0 0 0 12 19c2.5 0 4-1.3 4-3 0-.6-.2-1.2-.5-1.6"/>',
+    ul: '<path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1"/><circle cx="4.5" cy="12" r="1"/><circle cx="4.5" cy="18" r="1"/>',
+    ol: '<path d="M10 6h10M10 12h10M10 18h10M4 5l1.5-1v5M3.5 14.5a1.5 1.5 0 0 1 3 .5L3.5 19h3"/>',
+    quote: '<path d="M7 7H4v6h3l-1 4M17 7h-3v6h3l-1 4"/>',
+    hr: '<path d="M3 12h18M7 7h.01M12 7h.01M17 7h.01"/>',
+    video: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M10 9.5v5l4.5-2.5z"/>',
+    clear: '<path d="M6 5h12M12 5l-4 14M4 19h8M15 14l6 6M21 14l-6 6"/>',
   };
   const icon = (n, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ""}</svg>`;
   App.icon = icon;
@@ -139,16 +155,17 @@ window.App = (() => {
   };
   App.fail = (e) => App.toast(e.message || String(e), true);
 
-  App.modal = (title, html, onMount, { wide, onClose } = {}) => {
+  // xl — крупное окно (визуальный редактор); sticky — не закрывать кликом мимо окна, чтобы не потерять текст
+  App.modal = (title, html, onMount, { wide, xl, sticky, onClose } = {}) => {
     const root = $("#modal-root");
     const wrap = document.createElement("div");
     wrap.className = "modal-bg";
-    wrap.innerHTML = `<div class="modal ${wide ? "wide" : ""}" role="dialog" aria-modal="true">
+    wrap.innerHTML = `<div class="modal ${wide ? "wide" : ""} ${xl ? "xl" : ""}" role="dialog" aria-modal="true">
       <div class="modal-head"><h3>${esc(title)}</h3><button class="btn ghost sm" data-close aria-label="Закрыть">${icon("x")}</button></div>${html}</div>`;
     root.appendChild(wrap);
     let closed = false;
     const close = () => { if (closed) return; closed = true; wrap.remove(); onClose && onClose(); };
-    wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) close(); });
+    if (!sticky) wrap.addEventListener("mousedown", (e) => { if (e.target === wrap) close(); });
     $$("[data-close]", wrap).forEach((b) => b.addEventListener("click", close));
     const m = $(".modal", wrap);
     onMount && onMount(m, close);
@@ -189,8 +206,8 @@ window.App = (() => {
     `<div class="empty">${icon(ic)}<b>${esc(title)}</b>${text ? `<div>${esc(text)}</div>` : ""}${action}</div>`;
   App.loading = () => `<div class="empty"><div class="spinner"></div></div>`;
   App.badge = (text, tone = "") => `<span class="badge ${tone}">${esc(text)}</span>`;
-  App.statusTone = (s) => ({ new: "gray", in_work: "info", hold: "", approved: "ok", paid: "ok", rejected: "bad",
-    pending: "", open: "info", answered: "ok", closed: "gray", requested: "", active: "ok", disabled: "gray" }[s] ?? "gray");
+  App.statusTone = (s) => ({ new: "gray", in_work: "info", hold: "warn", approved: "ok", paid: "ok", rejected: "bad",
+    pending: "warn", open: "info", answered: "ok", closed: "gray", requested: "warn", active: "ok", disabled: "gray" }[s] ?? "gray");
 
   App.tabs = (el, onChange) => {
     $$("[data-tab]", el).forEach((t) => t.addEventListener("click", () => {
@@ -320,6 +337,7 @@ window.App = (() => {
     const crumbs = ["Главная", ...(p.crumbs || [])];
     $("#crumbs").innerHTML = crumbs.map((c, i) => i === 0 && crumbs.length > 1 ? `<a href="#/${App.home()}">${c}</a>` : esc(c)).join('<span class="sep">/</span>');
     const el = $("#page");
+    el.classList.toggle("wide", !!p.wide); // широкие страницы с крупными карточками
     const seq = ++renderSeq;
     el.innerHTML = App.loading();
     renderNav();
@@ -340,32 +358,91 @@ window.App = (() => {
   App.route = route;
 
   // ---------- вход / регистрация ----------
-  function showAuth(mode = "login", invite = null) {
+  // Вход — по логину и паролю. Регистрация — только по ссылке-приглашению: код из Telegram-бота, затем логин и пароль.
+  const brandHtml = (s) => `<div class="brand" style="justify-content:center"><span class="logo">${esc(s.logo_text || "")}</span><span>${esc(s.brand_name || "")} <b>${esc(s.brand_accent || "")}</b></span></div>`;
+
+  function showAuth(mode = "login", invite = null, notice = "") {
     $("#layout").hidden = true; $("#fab").hidden = true;
     const s = App.cfg?.settings || {};
     const el = $("#auth");
     el.hidden = false;
-    const reg = mode === "register";
-    const canSwitch = s.allow_registration || invite;
-    el.innerHTML = `<div class="auth-wrap"><form class="card auth-card" id="auth-form">
-      <div class="brand" style="justify-content:center"><span class="logo">${esc(s.logo_text || "")}</span><span>${esc(s.brand_name || "")} <b>${esc(s.brand_accent || "")}</b></span></div>
-      ${invite ? `<div class="notice">${icon("gift")}<div>Доступ к <b>«${esc(invite.tariff)}»</b>. ${reg ? "Зарегистрируйтесь" : "Войдите"}, чтобы начать.</div></div>` : ""}
-      <h2>${reg ? "Регистрация" : "Вход в кабинет"}</h2>
-      <div class="field"><label>Email</label><input class="input" name="email" type="email" autocomplete="email" required></div>
-      <div class="field"><label>Пароль</label><input class="input" name="password" type="password" minlength="${reg ? 8 : 1}" autocomplete="${reg ? "new-password" : "current-password"}" required></div>
-      ${reg ? `<div class="field"><label>Telegram (необязательно)</label><input class="input" name="username" placeholder="@username"></div>` : ""}
+    if (mode === "register" && invite) return showRegister(el, s, invite);
+    el.innerHTML = `<div class="auth-wrap"><form class="card auth-card" id="auth-form">${brandHtml(s)}
+      ${notice ? `<div class="notice">${icon("warn")}<div>${esc(notice)}</div></div>` : ""}
+      ${invite ? `<div class="notice">${icon("gift")}<div>Приглашение в <b>«${esc(invite.tariff)}»</b>. Войдите, чтобы активировать доступ.</div></div>` : ""}
+      <h2>Вход в кабинет</h2>
+      <div class="field"><label>Логин</label><input class="input" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+      <div class="field"><label>Пароль</label><input class="input" name="password" type="password" autocomplete="current-password" required></div>
       <div class="form-error"></div>
-      <button class="btn primary block" type="submit">${reg ? "Зарегистрироваться" : "Войти"}</button>
-      ${canSwitch ? `<p class="hint center">${reg ? "Уже есть аккаунт?" : "Нет аккаунта?"} <a href="#" class="link-btn" id="auth-switch">${reg ? "Войти" : "Зарегистрироваться"}</a></p>` : ""}
+      <button class="btn primary block" type="submit">Войти</button>
+      ${invite ? `<p class="hint center">Ещё нет аккаунта? <a href="#" class="link-btn" id="auth-switch">Зарегистрироваться</a></p>`
+        : `<p class="hint center">Регистрация — только по ссылке-приглашению от администратора.</p>`}
+      <p class="hint center m0">Забыли пароль? Напишите администратору — он задаст новый.</p>
     </form></div>`;
-    $("#auth-switch")?.addEventListener("click", (e) => { e.preventDefault(); showAuth(reg ? "login" : "register", invite); });
+    $("#auth-switch")?.addEventListener("click", (e) => { e.preventDefault(); showAuth("register", invite); });
     App.onSubmit($("#auth-form"), async (d) => {
-      if (reg && invite) d.invite = invite.code;
-      App.me = await App.post(reg ? "/api/auth/register" : "/api/auth/login", d);
+      App.me = await App.post("/api/auth/login", d);
+      if (invite) location.hash = `#/join/${invite.code}`;
       await boot();
     });
   }
   App.showAuth = showAuth;
+
+  function showRegister(el, s, invite) {
+    const st = { token: "", url: "", verified: false, login: "", error: "" };
+    const days = invite.days ? ` Доступ на ${invite.days} дн.` : "";
+    const draw = () => {
+      const step = (n, done, title, body) => `<div class="auth-step ${done ? "done" : ""}"><span class="n">${done ? icon("check") : n}</span>
+        <div class="t"><b>${title}</b>${body ? `<div class="mt8">${body}</div>` : ""}</div></div>`;
+      const s1 = st.url
+        ? `<a class="btn primary block" href="${esc(st.url)}" target="_blank" rel="noopener" id="open-bot">${icon("send")}Получить код в Telegram</a>
+           <p class="hint m0 mt8">Откроется бот — нажмите «Запустить» (Start), он пришлёт код.</p>`
+        : st.error ? `<div class="form-error" style="display:block">${esc(st.error)}</div>` : App.loading();
+      const s2 = `<form id="code-form"><div class="row"><input class="input code-input flex1" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="000000" required>
+          <button class="btn" type="submit">Подтвердить</button></div><div class="form-error"></div>
+          <p class="hint m0 mt8">Код не пришёл или устарел? <a href="#" class="link-btn" id="new-code">Получить новый</a></p></form>`;
+      const s3 = `<form id="reg-form">
+          <div class="field"><label>Логин</label><input class="input" name="login" value="${esc(st.login)}" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="латиница, цифры, _ . -">
+            <span class="hint">По нему вы будете входить в кабинет</span></div>
+          <div class="field"><label>Пароль</label><input class="input" name="password" type="password" minlength="8" autocomplete="new-password" required placeholder="Минимум 8 символов"></div>
+          <div class="field"><label>Повторите пароль</label><input class="input" name="password2" type="password" autocomplete="new-password" required></div>
+          <div class="form-error"></div>
+          <button class="btn primary block" type="submit">Зарегистрироваться</button></form>`;
+      el.innerHTML = `<div class="auth-wrap"><div class="card auth-card">${brandHtml(s)}
+        <div class="notice">${icon("gift")}<div>Приглашение в <b>«${esc(invite.tariff)}»</b>.${esc(days)}</div></div>
+        <h2>Регистрация</h2>
+        <div class="auth-steps">
+          ${step(1, st.verified, "Подтвердите Telegram", st.verified ? "" : s1)}
+          ${step(2, st.verified, "Введите код из бота", st.verified || !st.url ? "" : s2)}
+          ${step(3, false, "Придумайте логин и пароль", st.verified ? s3 : "")}
+        </div>
+        <p class="hint center m0">Уже есть аккаунт? <a href="#" class="link-btn" id="auth-switch">Войти</a></p>
+      </div></div>`;
+      $("#auth-switch").onclick = (e) => { e.preventDefault(); showAuth("login", invite); };
+      $("#open-bot")?.addEventListener("click", () => setTimeout(() => $("#code-form [name=code]")?.focus(), 300));
+      $("#new-code")?.addEventListener("click", (e) => { e.preventDefault(); start(); });
+      const cf = $("#code-form");
+      if (cf) App.onSubmit(cf, async (d) => {
+        const r = await App.post("/api/auth/tg/check", { token: st.token, code: d.code });
+        Object.assign(st, { verified: true, login: r.login || "" });
+        draw(); $("#reg-form [name=login]")?.focus();
+      });
+      const rf = $("#reg-form");
+      if (rf) App.onSubmit(rf, async (d) => {
+        if (d.password !== d.password2) throw new Error("Пароли не совпадают");
+        App.me = await App.post("/api/auth/register", { token: st.token, login: d.login, password: d.password });
+        location.hash = "#/";
+        await boot();
+      });
+    };
+    const start = async () => {
+      Object.assign(st, { url: "", error: "" }); draw();
+      try { Object.assign(st, await App.post("/api/auth/tg/start", { invite: invite.code })); }
+      catch (e) { st.error = e.message; }
+      draw();
+    };
+    start();
+  }
 
   async function boot() {
     const cfg = await App.get("/api/config");
@@ -374,7 +451,7 @@ window.App = (() => {
       const r = route();
       if (r.name === "join" && r.arg) {
         try { const inv = await App.get(`/api/invite/${encodeURIComponent(r.arg)}`); return showAuth("register", { ...inv, code: r.arg }); }
-        catch { /* ссылка недействительна — обычный вход */ }
+        catch (e) { return showAuth("login", null, e.message); }
       }
       return showAuth();
     }

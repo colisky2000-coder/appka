@@ -1,0 +1,12 @@
+# Кабинет в подпапке сайта: https://schooloftraff.ru/secretniyadresstest/
+# Этот файл кладётся в public_html/secretniyadresstest/ под именем .htaccess
+# Остальной сайт он не затрагивает: правила действуют только внутри этой папки.
+
+# Правила переадресации основного сайта сюда не применяются
+RewriteEngine Off
+Options -Indexes
+
+# Запуск Python-приложения. ЛОГИН — ваш логин на хостинге (путь есть в панели: «Файловый менеджер»)
+PassengerEnabled On
+PassengerAppRoot /home/ЛОГИН/schooloftraff.ru/cabinet
+PassengerPython /home/ЛОГИН/schooloftraff.ru/venv/bin/python3

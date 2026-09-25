@@ -1,6 +1,6 @@
 /* Страницы личного кабинета пользователя. */
 (() => {
-  const { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, ago, nl2br, linkify, qs, icon, initial, md, cover } = App;
+  const { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, ago, nl2br, linkify, qs, icon, initial, md, rich, cover } = App;
   const P = App.pages;
   const S = () => App.cfg.settings;
 
@@ -84,25 +84,31 @@
       if (a.url && !a.body) return window.open(a.url, "_blank", "noopener");
       App.modal(a.title, `${a.cover ? cover(a.cover, a.title, "wide-cover") : ""}
         <p class="muted">${esc(a.category)}${a.category ? " · " : ""}${fmtDate(a.created_at)}</p>
-        <div class="prose">${md(a.body)}</div>
+        <div class="prose">${rich(a.body)}</div>
         ${a.url ? `<a class="btn mt" href="${esc(a.url)}" target="_blank" rel="noopener">${icon("ext")}Открыть источник</a>` : ""}`, null, { wide: true });
     } catch (e) { App.fail(e); }
   };
-  // Карточка статьи или файла с превью
+  const fmtSize = (b) => b >= 1048576 ? `${(b / 1048576).toFixed(1).replace(".", ",")} МБ` : `${Math.max(1, Math.round(b / 1024))} КБ`;
+  // Крупная карточка статьи или файла с превью (сетка .media-grid.lg)
   App.contentCard = (x) => {
     const isFile = x.kind === "material";
     const href = isFile ? (x.download || x.url) : "";
     const tag = isFile ? `a href="${esc(href)}" ${x.download ? "" : 'target="_blank" rel="noopener"'}` : `button data-article="${x.id}"`;
     const badge = isFile ? (x.download ? icon("download") : icon("ext")) : (x.url ? icon("ext") : "");
+    const ext = isFile && x.filename.includes(".") ? x.filename.split(".").pop().toUpperCase().slice(0, 5) : "";
+    const kind = isFile ? (x.download ? `Файл${ext ? " · " + ext : ""}` : "Ссылка") : `Статья${x.category ? " · " + x.category : ""}`;
+    const action = isFile ? (x.download ? `Скачать${x.size ? " · " + fmtSize(x.size) : ""}` : "Открыть") : (x.url && !x.has_body ? "Открыть" : "Читать");
     return `<${tag} class="card-media">${cover(x.cover, x.title)}
       <div class="cm-body">${badge ? `<span class="cm-badge">${badge}</span>` : ""}
-        <h3>${esc(x.title)}</h3><p>${esc(x.description || (isFile ? x.filename : "") || "")}</p>
-        <time>${icon("clock")}${ago(x.created_at)}</time></div></${isFile ? "a" : "button"}>`;
+        <span class="cm-kind">${esc(kind)}</span>
+        <h3>${esc(x.title)}</h3>${x.description ? `<p>${esc(x.description)}</p>` : ""}
+        <div class="cm-foot"><span class="row gap8">${icon("clock")}${ago(x.created_at)}</span><span class="go">${esc(action)}${icon("arrow")}</span></div>
+      </div></${isFile ? "a" : "button"}>`;
   };
   App.bindContentCards = (root) => $$("[data-article]", root).forEach((b) => b.onclick = () => App.openArticle(+b.dataset.article));
 
   P.manuals = {
-    feature: "manuals",
+    feature: "manuals", wide: true,
     crumbs: ["База знаний"],
     async render(el) {
       const [arts, mats] = await Promise.all([App.get("/api/articles"), App.get("/api/materials")]);
@@ -114,10 +120,10 @@
           <div class="input-icon w280 mb">${icon("search")}<input class="input" id="q" placeholder="Поиск статей..."></div>
           ${cats.length ? `<div class="chips mb" id="cats"><button class="chip active" data-c="">Все<sup>${arts.length}</sup></button>
             ${cats.map((c) => `<button class="chip" data-c="${esc(c)}">${esc(c)}<sup>${arts.filter((a) => a.category === c).length}</sup></button>`).join("")}</div>` : ""}
-          <div class="media-grid" id="arts"></div>
+          <div class="media-grid lg" id="arts"></div>
         </div>
         <div data-pane="m" hidden>
-          ${mats.length ? `<div class="media-grid">${mats.map(App.contentCard).join("")}</div>` : `<div class="card soft">${App.empty("folder", "Файлов пока нет")}</div>`}
+          ${mats.length ? `<div class="media-grid lg">${mats.map(App.contentCard).join("")}</div>` : `<div class="card soft">${App.empty("folder", "Файлов пока нет")}</div>`}
         </div>`;
     },
     mount(el) {
@@ -142,7 +148,7 @@
     if (!t) return;
     if (t.type === "lesson") location.hash = `#/lesson/${t.id}`;
     else if (t.type === "article") App.openArticle(t.id);
-    else window.open(t.url, t.type === "material" && t.url.startsWith("/api/") ? "_self" : "_blank", "noopener");
+    else window.open(t.url, t.type === "material" && t.url.startsWith("api/") ? "_self" : "_blank", "noopener");
   };
   const targetLabel = (t) => !t ? "" : t.type === "lesson" ? `Открыть: ${t.title}` : t.type === "url" ? "Перейти по ссылке" : `Открыть: ${t.title}`;
   const taskHtml = (attr, id, text, done) => `<label class="task ${done ? "done" : ""}">
@@ -260,7 +266,7 @@
         <div class="lesson-head"><div class="hint">Урок ${l.num} из ${l.total}${l.duration ? " · " + esc(l.duration) : ""}</div>
           <h1>${esc(l.title)}</h1></div>
         ${video}
-        ${l.body ? `<div class="card prose">${md(l.body)}</div>` : ""}
+        ${l.body ? `<div class="card prose">${rich(l.body)}</div>` : ""}
         ${l.todo.length ? `<div class="card"><div class="card-title">${icon("check")}Что сделать после урока</div>
           <div class="tasks">${l.todo.map((t) => taskHtml("data-task", t.id, t.text, t.done)).join("")}</div></div>` : ""}
         <div class="lesson-nav">
@@ -291,12 +297,12 @@
   };
 
   P["learn-materials"] = {
-    feature: "learning",
+    feature: "learning", wide: true,
     crumbs: ["Обучение", "Материалы"],
     async render(el) {
       const items = await App.get(withProgram("/api/learn/materials"));
       el.innerHTML = `${App.pageHead("folder", "Материалы", "Статьи и файлы программы")}
-        ${items.length ? `<div class="media-grid">${items.map(App.contentCard).join("")}</div>` : `<div class="card soft">${App.empty("folder", "Материалов пока нет")}</div>`}`;
+        ${items.length ? `<div class="media-grid lg">${items.map(App.contentCard).join("")}</div>` : `<div class="card soft">${App.empty("folder", "Материалов пока нет")}</div>`}`;
     },
     mount(el) { App.bindContentCards(el); },
   };
@@ -568,7 +574,7 @@
       let subidsLoaded = false;
       const params = () => { const d = Object.fromEntries(new FormData(form)); return qs(d); };
       const load = async () => {
-        $("#csv", el).href = "/api/stats.csv?" + params();
+        $("#csv", el).href = "api/stats.csv?" + params();
         let s;
         try { s = await App.get("/api/stats?" + params()); } catch (e) { return App.fail(e); }
         if (!subidsLoaded && s.subids.length) {
@@ -673,14 +679,13 @@
         <label class="switch"><input type="checkbox" data-set="${key}" ${me[key] ? "checked" : ""}><span></span></label></div>`;
       el.innerHTML = `${App.pageHead("user", "Мой профиль", "Личные данные и настройки")}
         <form class="card" id="pf">
-          <div class="field"><label>Email</label><input class="input" value="${esc(me.email)}" disabled></div>
+          <div class="field"><label>Логин для входа</label><input class="input" value="${esc(me.login)}" disabled></div>
           <div class="field"><label>Отображаемое имя</label><input class="input" name="display_name" value="${esc(me.display_name)}" maxlength="120" placeholder="Как вас показывать в кабинете"></div>
-          <div class="field"><label>Юзернейм в Telegram</label><input class="input" name="username" value="${esc(me.username)}" maxlength="64" placeholder="@username"></div>
           <div class="form-error"></div>
           <button class="btn" type="submit">${icon("check")}Сохранить</button>
         </form>
         <div class="card"><div class="card-title">${icon("send")}Уведомления в Telegram</div>
-          ${me.telegram_linked ? `<div class="row"><span>${icon("check", "ok")} Telegram привязан</span><span class="spacer"></span><button class="btn sm" id="tg-off">Отвязать</button></div>`
+          ${me.telegram_linked ? `<div class="row"><span>${icon("check", "ok")} Telegram привязан${me.username ? ` — <b>@${esc(me.username)}</b>` : ""}</span><span class="spacer"></span><button class="btn sm" id="tg-off">Отключить уведомления</button></div>`
             : bot ? `<p class="muted m0">Привяжите Telegram, чтобы получать уведомления о статусах заявок, ответах поддержки и пополнениях.</p><button class="btn block mt" id="tg-on">${icon("send")}Привязать через бота</button>`
             : `<p class="muted m0">Уведомления в Telegram пока не настроены администратором.</p>`}</div>
         <div class="card"><div class="card-title">${icon("bell")}Настройки</div>

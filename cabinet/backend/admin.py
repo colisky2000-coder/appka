@@ -2,26 +2,24 @@
 import csv
 import io
 import os
-import secrets
 from datetime import timedelta
 
 from flask import Blueprint, Response, g, request
 from sqlalchemy import func, or_
 
-from . import features, media, partner_api, settings, telegram
+from . import features, media, partner_api, richtext, settings, telegram
 from .api import conversions_query, ser_ticket
 from .auth import admin_required, hash_password, validate_password
 from .db import db, utcnow
 from .models import (
-    Article, ArticleProgram, Click, Conversion, Lesson, Material, MaterialProgram, News, Offer, OfferLink,
-    Program, Setting, Step, StepTask, Tariff, TeamMember,
-    Ticket, TicketMessage, TopUpRequest, User, UserSession,
+    Article, ArticleProgram, Click, Conversion, Invite, Lesson, Material, MaterialProgram, News, Offer, OfferLink,
+    Program, Step, StepTask, Tariff, TeamMember, Ticket, TicketMessage, TopUpRequest, Upload, User, UserSession,
 )
 from .services import (
-    change_balance, create_conversion, ser_conversion, ser_link, ser_tariff, ser_user,
+    change_balance, clean_login, create_conversion, norm_login, ser_conversion, ser_invite, ser_link, ser_user,
     set_conversion_status, link_counts,
 )
-from .util import ApiError, clean_email, clean_inn, clean_str, clean_url, iso, new_code, ok, parse_date, rub, to_kop
+from .util import ApiError, clean_inn, clean_str, clean_url, iso, new_code, ok, parse_date, rub, to_kop
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
@@ -66,9 +64,11 @@ def users():
     s = (request.args.get("q") or "").strip()
     if s:
         like = f"%{s}%"
-        q = q.filter(or_(User.email.ilike(like), User.username.ilike(like), User.display_name.ilike(like)))
+        q = q.filter(or_(User.login.ilike(like), User.username.ilike(like), User.display_name.ilike(like)))
     if request.args.get("role"):
         q = q.filter(User.role == request.args["role"])
+    if request.args.get("invite"):
+        q = q.filter(User.invite_id == request.args.get("invite", type=int))
     items, meta = paginate(q.order_by(User.created_at.desc()))
     return ok([ser_user(u, admin=True) for u in items], meta=meta)
 
@@ -83,12 +83,10 @@ def get_user(uid):
 @bp.post("/users")
 def user_create():
     d = body()
-    email = clean_email(d.get("email"))
+    login = clean_login(d.get("login"))
     validate_password(d.get("password"))
-    if db.query(User).filter_by(email=email).first():
-        raise ApiError("Такой email уже зарегистрирован")
     tariff = db.query(Tariff).filter_by(is_default=True).first()
-    u = User(email=email, password_hash=hash_password(d["password"]),
+    u = User(login=login, password_hash=hash_password(d["password"]),
              username=clean_str(d.get("username"), "Telegram", 64).lstrip("@"),
              role="admin" if d.get("role") == "admin" else "user",
              tariff_id=tariff.id if tariff else None, links_access=bool(d.get("links_access")))
@@ -111,11 +109,8 @@ def user_detail(uid):
 @bp.patch("/users/<int:uid>")
 def user_update(uid):
     u, d = get_user(uid), body()
-    if "email" in d:
-        email = clean_email(d["email"])
-        if email != u.email and db.query(User).filter_by(email=email).first():
-            raise ApiError("Такой email уже зарегистрирован")
-        u.email = email
+    if "login" in d and norm_login(d["login"]) != u.login:
+        u.login = clean_login(d["login"], exclude_id=u.id)
     if "username" in d:
         u.username = clean_str(d["username"], "Telegram", 64).lstrip("@")
     if "display_name" in d:
@@ -193,7 +188,7 @@ RESOURCES = {
     ], (Offer.sort, Offer.id)),
     "articles": (Article, [
         ("title", "str", "Заголовок", True), ("description", "str", "Краткое описание", False),
-        ("category", "str", "Категория", False), ("body", "text", "Текст статьи", False),
+        ("category", "str", "Категория", False), ("body", "html", "Текст статьи", False),
         ("url", "url", "Внешняя ссылка (вместо текста)", False),
         ("min_tariff_id", "tariff", "Минимальный уровень тарифа (для «Мануалов»)", False),
         ("show_in_manuals", "bool", "Показывать в «Мануалах»", False),
@@ -211,8 +206,6 @@ RESOURCES = {
         ("name", "str", "Название", True), ("code", "str", "Код (латиницей, для системы)", True),
         ("features", "features", "Разделы, которые видит человек на этом тарифе", False),
         ("program_id", "program", "Программа обучения (для раздела «Обучение»)", False),
-        ("invite_enabled", "bool", "Регистрация по ссылке-приглашению", False),
-        ("invite_days", "int", "Доступ по приглашению, дней (0 — бессрочно)", False),
         ("description", "text", "Описание", False),
         ("price", "money", "Цена, ₽ (для покупки с баланса)", False), ("period_days", "int", "Срок при покупке, дней", False),
         ("rate", "int", "Ставка по офферам, % от базовой выплаты", False), ("level", "int", "Уровень доступа к статьям", False),
@@ -226,7 +219,7 @@ RESOURCES = {
         ("program_id", "program", "Программа", True), ("title", "str", "Название урока", True),
         ("video_url", "url", "Ссылка на видео (RuTube, VK Видео, YouTube…)", False),
         ("duration", "str", "Длительность (например, «15 мин»)", False),
-        ("body", "text", "Описание урока", False),
+        ("body", "html", "Описание урока", False),
         ("is_published", "bool", "Опубликован", False), ("sort", "int", "Порядок", False),
     ], (Lesson.program_id, Lesson.sort, Lesson.id)),
 }
@@ -269,14 +262,15 @@ def ser_generic(obj, fields):
             d[name] = placement_ids(obj)
             continue
         v = getattr(obj, name)
-        d[name] = rub(v) if typ == "money" else features.parse(v) if typ == "features" else v
+        d[name] = (rub(v) if typ == "money" else features.parse(v) if typ == "features"
+                   else richtext.for_output(v) if typ == "html" else v)
     if hasattr(obj, "created_at"):
         d["created_at"] = iso(obj.created_at)
     if hasattr(obj, "cover_mime"):
         kind = next(k for k, m in COVER_MODELS.items() if isinstance(obj, m))
         d["cover"] = media.cover_link(kind, obj)
     if isinstance(obj, Tariff):
-        d["invite_code"] = obj.invite_code
+        d["invites"] = db.query(func.count(Invite.id)).filter_by(tariff_id=obj.id).scalar()
     return d
 
 
@@ -291,6 +285,8 @@ def apply_fields(obj, fields, data, creating):
             v = clean_str(v, label, 300, required)
         elif typ == "text":
             v = clean_str(v, label, 50000, required)
+        elif typ == "html":
+            v = richtext.clean(v, label)
         elif typ == "url":
             v = clean_url(v, label, required)
         elif typ == "money":
@@ -377,6 +373,8 @@ def res_delete(name, oid):
         raise ApiError("Запись не найдена", 404)
     if name == "tariffs" and obj.is_default:
         raise ApiError("Нельзя удалить тариф по умолчанию")
+    if name == "tariffs":
+        delete_invites(db.query(Invite).filter_by(tariff_id=obj.id).all())
     db.delete(obj)
     db.commit()
     return ok()
@@ -390,8 +388,6 @@ def after_save(name, obj, data, created):
             raise ApiError("Тариф с таким кодом уже есть")
         if obj.is_default:
             db.query(Tariff).filter(Tariff.id != obj.id).update({"is_default": False})
-        if not obj.invite_code:
-            obj.invite_code = new_code(12)
     if name == "news" and created and data.get("broadcast") and telegram.enabled():
         text = f"{obj.title}\n\n{obj.body}"[:4000]
         for u in db.query(User).filter(User.chat_id != "", User.notify.is_(True), User.is_blocked.is_(False)):
@@ -473,7 +469,7 @@ def links():
         q = q.filter(OfferLink.status == request.args["status"])
     if request.args.get("q"):
         like = f"%{request.args['q'].strip()}%"
-        q = q.filter(or_(User.email.ilike(like), User.username.ilike(like)))
+        q = q.filter(or_(User.login.ilike(like), User.username.ilike(like)))
     items, meta = paginate(q.order_by(OfferLink.created_at.desc()))
     ids = [l.id for l in items]
     counts = link_counts(ids)
@@ -481,7 +477,7 @@ def links():
     out = []
     for l in items:
         d = ser_link(l, counts.get(l.id, 0), clicks.get(l.id, 0))
-        d.update(target_url=l.url, user={"id": l.user.id, "email": l.user.email, "username": l.user.username})
+        d.update(target_url=l.url, user={"id": l.user.id, "login": l.user.login, "username": l.user.username})
         out.append(d)
     return ok(out, meta=meta)
 
@@ -607,7 +603,7 @@ def conversions_csv():
     w.writerow(["ID", "Дата", "Пользователь", "Оффер", "ИНН", "ФИО", "Телефон", "Субметка", "Статус", "Сумма", "Комментарий"])
     for c in admin_conv_query().order_by(Conversion.created_at.desc()).all():
         s = ser_conversion(c, admin=True)
-        w.writerow([c.id, s["created_at"], c.user.email, s["offer_name"], c.inn, c.fio, c.phone, c.subid,
+        w.writerow([c.id, s["created_at"], c.user.login, s["offer_name"], c.inn, c.fio, c.phone, c.subid,
                     s["status_name"], str(s["amount"]).replace(".", ","), c.comment])
     return Response("﻿" + buf.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": "attachment; filename=conversions.csv"})
@@ -622,7 +618,7 @@ def topups():
     items, meta = paginate(q.order_by(TopUpRequest.created_at.desc()))
     return ok([{"id": t.id, "amount": rub(t.amount), "note": t.note, "status": t.status, "admin_note": t.admin_note,
                 "created_at": iso(t.created_at), "processed_at": iso(t.processed_at),
-                "user": {"id": t.user.id, "email": t.user.email, "username": t.user.username}} for t in items], meta=meta)
+                "user": {"id": t.user.id, "login": t.user.login, "username": t.user.username}} for t in items], meta=meta)
 
 
 @bp.post("/topups/<int:tid>/<action>")
@@ -819,14 +815,106 @@ def cover_delete(kind, oid):
     return ok()
 
 
-@bp.post("/tariffs/<int:tid>/invite")
-def invite_regenerate(tid):
-    t = db.get(Tariff, tid)
-    if not t:
-        raise ApiError("Тариф не найден", 404)
-    t.invite_code = new_code(12)
+# ================= ссылки-приглашения =================
+def fill_invite(inv, d):
+    if "tariff_id" in d:
+        t = db.get(Tariff, int(d["tariff_id"] or 0))
+        if not t:
+            raise ApiError("Выберите тариф")
+        inv.tariff_id = t.id
+    if "title" in d:
+        inv.title = clean_str(d["title"], "Заметка", 200)
+    for f, label in (("max_uses", "Лимит регистраций"), ("days", "Срок доступа")):
+        if f in d:
+            try:
+                setattr(inv, f, max(0, int(d[f] or 0)))
+            except (TypeError, ValueError):
+                raise ApiError(f"«{label}»: введите целое число")
+    if "expires_at" in d:
+        day = parse_date(d["expires_at"], "Ссылка действует до")
+        inv.expires_at = day + timedelta(days=1) if day else None  # включительно
+    if "is_active" in d:
+        inv.is_active = bool(d["is_active"])
+
+
+def delete_invites(items):
+    ids = [i.id for i in items]
+    if ids:
+        db.query(User).filter(User.invite_id.in_(ids)).update({"invite_id": None}, synchronize_session=False)
+    for i in items:
+        db.delete(i)
+
+
+def get_invite_obj(iid):
+    inv = db.get(Invite, iid)
+    if not inv:
+        raise ApiError("Ссылка не найдена", 404)
+    return inv
+
+
+@bp.get("/invites")
+def invites():
+    q = db.query(Invite)
+    if request.args.get("tariff"):
+        q = q.filter(Invite.tariff_id == request.args.get("tariff", type=int))
+    return ok([ser_invite(i) for i in q.order_by(Invite.created_at.desc(), Invite.id.desc()).all()])
+
+
+@bp.post("/invites")
+def invite_create():
+    d = body()
+    if not d.get("tariff_id"):
+        raise ApiError("Выберите тариф")
+    code = new_code(10)
+    while db.query(Invite).filter_by(code=code).first():
+        code = new_code(10)
+    inv = Invite(code=code)
+    fill_invite(inv, d)
+    db.add(inv)
     db.commit()
-    return ok({"invite_code": t.invite_code})
+    return ok(ser_invite(inv))
+
+
+@bp.patch("/invites/<int:iid>")
+def invite_update(iid):
+    inv = get_invite_obj(iid)
+    fill_invite(inv, body())
+    db.commit()
+    return ok(ser_invite(inv))
+
+
+@bp.delete("/invites/<int:iid>")
+def invite_delete(iid):
+    delete_invites([get_invite_obj(iid)])
+    db.commit()
+    return ok()
+
+
+# ================= визуальный редактор =================
+@bp.post("/uploads")
+def upload_image():
+    """Картинка для текста урока/статьи: файл (multipart «file») или ссылка {"url"}."""
+    file = request.files.get("file")
+    if file and file.filename:
+        data = file.read()
+        mime = media.validate_image(data)
+    elif body().get("url"):
+        data, mime = media.download_image(clean_url(body()["url"], "Ссылка на картинку", True))
+    else:
+        raise ApiError("Выберите картинку")
+    key = new_code(20)
+    db.add(Upload(key=key, mime=mime, size=len(data), data=data))
+    db.commit()
+    return ok({"url": f"media/u/{key}"})
+
+
+@bp.post("/embed")
+def embed():
+    url = clean_url(body().get("url"), "Ссылка на видео", True)
+    src = media.video_embed(url, autoplay=False)
+    if not src or not richtext.EMBED_RE.match(src):
+        raise ApiError("Такое видео не встраивается. Подходят YouTube, RuTube, VK Видео, Vimeo, Дзен")
+    return ok({"src": src})
 
 
 # ================= настройки =================
@@ -847,18 +935,11 @@ def put_settings():
 def tg_webhook():
     if not telegram.enabled():
         raise ApiError("Не задан TELEGRAM_BOT_TOKEN")
-    base = (os.environ.get("PUBLIC_URL") or request.host_url).rstrip("/")
+    base = (os.environ.get("PUBLIC_URL") or request.url_root).rstrip("/")
     if not base.startswith("https://"):
         raise ApiError("Telegram требует HTTPS-адрес. Укажите PUBLIC_URL")
-    secret = secrets.token_hex(16)
-    row = db.get(Setting, telegram.SECRET_KEY)
-    if row:
-        row.value = secret
-    else:
-        db.add(Setting(key=telegram.SECRET_KEY, value=secret))
-    db.commit()
     try:
-        res = telegram.set_webhook(f"{base}/tg/webhook", secret)
+        res = telegram.set_webhook(f"{base}/tg/webhook")
     except Exception as e:
         raise ApiError(f"Telegram: {e}")
     return ok(res)

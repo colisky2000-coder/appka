@@ -9,6 +9,8 @@
 ссылка остаётся в статусе «запрошена», и её можно вписать вручную в админке
 (раздел «Ссылки»).
 """
+from __future__ import annotations  # Python 3.9 на хостинге
+
 import logging
 
 log = logging.getLogger(__name__)
