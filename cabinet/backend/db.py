@@ -26,6 +26,31 @@ def normalize_db_url(url: str) -> str:
     return url
 
 
+def auto_migrate(engine):
+    """
+    Добавляет в существующие таблицы колонки, появившиеся в моделях.
+    Простая замена миграциям: только добавление, без переименований и удалений.
+    """
+    from sqlalchemy import inspect, literal, text
+
+    insp = inspect(engine)
+    existing_tables = set(insp.get_table_names())
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue
+            have = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name in have:
+                    continue
+                ddl = f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col.type.compile(engine.dialect)}'
+                default = col.default.arg if col.default is not None and col.default.is_scalar else None
+                if default is not None:
+                    lit = literal(default, type_=col.type).compile(dialect=engine.dialect, compile_kwargs={"literal_binds": True})
+                    ddl += f" NOT NULL DEFAULT {lit}"
+                conn.execute(text(ddl))
+
+
 def init_engine(url: str):
     url = normalize_db_url(url)
     kwargs = {"pool_pre_ping": True}

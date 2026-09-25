@@ -43,8 +43,27 @@ window.App = (() => {
   const nl2br = (s) => esc(s).replace(/\n/g, "<br>");
   const linkify = (s) => nl2br(s).replace(/(https?:\/\/[^\s<]+)/g, '<a class="link-btn" href="$1" target="_blank" rel="noopener">$1</a>');
   const initial = (name) => (String(name || "").replace(/^@/, "")[0] || "?").toUpperCase();
+  // Простое форматирование текста: абзацы, «# » и «## » заголовки, списки «- », **жирный**, ссылки
+  const md = (src) => {
+    const inline = (t) => t.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+      .replace(/(https?:\/\/[^\s<]+)/g, '<a class="link-btn" href="$1" target="_blank" rel="noopener">$1</a>');
+    let html = "", list = false;
+    for (const ln of esc(src || "").split(/\r?\n/)) {
+      const li = ln.match(/^\s*[-•*]\s+(.*)$/);
+      if (li) { if (!list) { html += "<ul>"; list = true; } html += `<li>${inline(li[1])}</li>`; continue; }
+      if (list) { html += "</ul>"; list = false; }
+      if (/^##\s+/.test(ln)) html += `<h4>${inline(ln.replace(/^##\s+/, ""))}</h4>`;
+      else if (/^#\s+/.test(ln)) html += `<h3>${inline(ln.replace(/^#\s+/, ""))}</h3>`;
+      else if (ln.trim()) html += `<p>${inline(ln)}</p>`;
+    }
+    return html + (list ? "</ul>" : "");
+  };
+  // Превью: картинка или заглушка с первой буквой
+  const cover = (url, title, cls = "") => url
+    ? `<div class="cover ${cls}"><img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer"></div>`
+    : `<div class="cover ph ${cls}"><span>${esc((String(title || "").replace(/^@/, "")[0] || "•").toUpperCase())}</span></div>`;
   const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== "" && v != null && v !== false)).toString();
-  Object.assign(App, { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, ago, nl2br, linkify, qs, initial });
+  Object.assign(App, { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, ago, nl2br, linkify, qs, initial, md, cover });
 
   // ---------- иконки ----------
   const ICONS = {
@@ -99,6 +118,12 @@ window.App = (() => {
     check: '<path d="M5 12l5 5 9-10"/>',
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+    play: '<circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5z"/>',
+    arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+    up: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+    image: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-9 9"/>',
+    eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   };
   const icon = (n, cls = "") => `<svg class="i ${cls}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ""}</svg>`;
   App.icon = icon;
@@ -188,20 +213,44 @@ window.App = (() => {
   };
 
   // ---------- меню ----------
+  // Разделы, которые видит пользователь. Админ в режиме «глазами тарифа» видит разделы этого тарифа.
+  try { App.viewTariff = JSON.parse(localStorage.getItem("cab:viewTariff") || "null"); } catch { App.viewTariff = null; }
+  const isAdmin = () => App.me?.role === "admin";
+  App.features = () => (isAdmin() && App.viewTariff ? App.viewTariff.features : App.me?.features) || [];
+  App.can = (...keys) => keys.some((k) => App.features().includes(k));
+  App.programParam = () => (isAdmin() && App.viewTariff?.program_id ? `program=${App.viewTariff.program_id}` : "");
+  App.setViewTariff = (t) => {
+    App.viewTariff = t ? { id: t.id, name: t.name, features: t.features, program_id: t.program_id } : null;
+    try { t ? localStorage.setItem("cab:viewTariff", JSON.stringify(App.viewTariff)) : localStorage.removeItem("cab:viewTariff"); } catch { /* ignore */ }
+    renderShell();
+    location.hash = "#/" + (t ? App.home() : "admin");
+    render();
+  };
+  // Первая доступная страница — «главная» для этого тарифа
+  const HOME_ORDER = [["dashboard", "dashboard"], ["learn", "learning"], ["manuals", "manuals"], ["offers", "offers"],
+    ["favorites", "favorites"], ["conversions", "conversions"], ["stats", "stats"], ["traffic", "traffic"], ["support", "support"]];
+  App.home = () => (HOME_ORDER.find(([, f]) => App.can(f)) || ["profile"])[0];
+
   function menu() {
-    const s = App.cfg.settings, admin = App.me?.role === "admin";
-    const on = (k) => s[k] || admin;
-    const items = [{ id: "dashboard", label: "Дашборд", icon: "home" }];
-    if (on("section_manuals")) items.push({ id: "manuals", label: "Мануалы", icon: "book" });
-    if (on("section_traffic")) items.push({ id: "traffic", label: "Закуп трафика", icon: "cart" });
-    if (on("section_partner")) items.push({ id: "partner", label: "Партнёрка", icon: "handshake", children: [
+    const s = App.cfg.settings, can = App.can;
+    const items = [];
+    if (can("dashboard")) items.push({ id: "dashboard", label: "Дашборд", icon: "home" });
+    if (can("learning")) items.push({ id: "learning", label: s.learn_title || "Обучение", icon: "trend", children: [
+      { id: "learn", label: "Роадмап", icon: "target" },
+      { id: "lessons", label: "Уроки", icon: "play" },
+      { id: "learn-materials", label: "Материалы", icon: "folder" },
+    ] });
+    if (can("manuals")) items.push({ id: "manuals", label: "Мануалы", icon: "book" });
+    if (can("traffic")) items.push({ id: "traffic", label: "Закуп трафика", icon: "cart" });
+    const partner = [
       { id: "offers", label: "Офферы", icon: "grid" },
       { id: "favorites", label: "Избранное и ссылки", icon: "star" },
       { id: "conversions", label: "Заявки", icon: "file" },
       { id: "stats", label: "Статистика", icon: "chart" },
-    ] });
-    items.push({ id: "support", label: "Поддержка", icon: "chat" });
-    if (admin) items.push({ id: "admin", label: "Админка", icon: "settings", children: App.adminMenu });
+    ].filter((c) => can(c.id));
+    if (partner.length) items.push({ id: "partner", label: "Партнёрка", icon: "handshake", children: partner });
+    if (can("support")) items.push({ id: "support", label: "Поддержка", icon: "chat" });
+    if (isAdmin()) items.push({ id: "admin", label: "Админка", icon: "settings", children: App.adminMenu });
     return items;
   }
   let openGroups = [];
@@ -236,13 +285,20 @@ window.App = (() => {
     $("#back").innerHTML = icon("back");
     $("#fab").innerHTML = icon("help");
     $("#side-bottom").innerHTML = `
-      ${s.section_billing || me.role === "admin" ? `<a class="tariff" href="#/billing">${icon("card")}${esc(me.tariff?.name || "Без тарифа")}</a>` : ""}
+      ${App.can("billing") ? `<a class="tariff" href="#/billing">${icon("card")}${esc(me.tariff?.name || "Без тарифа")}</a>`
+        : `<div class="tariff">${icon("card")}${esc(me.tariff?.name || "Без тарифа")}</div>`}
       <div class="me"><span class="avatar">${esc(initial(me.name))}</span><div>${esc(me.name)}<small>${me.role === "admin" ? "Администратор" : "Пользователь"}</small></div></div>
       <a class="nav-item" data-route="profile" href="#/profile">${icon("user")}Профиль</a>
-      <a class="nav-item" data-route="income" href="#/income">${icon("wallet")}Доходы</a>
+      ${App.can("income") ? `<a class="nav-item" data-route="income" href="#/income">${icon("wallet")}Доходы</a>` : ""}
       <a class="nav-item" data-route="password" href="#/password">${icon("key")}Сменить пароль</a>
       <button class="nav-item" id="logout">${icon("logout")}Выйти</button>`;
     $("#logout").onclick = async () => { try { await App.post("/api/auth/logout"); } catch { /* ignore */ } App.me = null; location.hash = ""; showAuth(); };
+    $("#brand").href = "#/" + App.home();
+    $("#fab").hidden = !App.can("support");
+    $("#preview-bar").hidden = !(isAdmin() && App.viewTariff);
+    $("#preview-bar").innerHTML = App.viewTariff ? `${icon("user")}<span>Вы смотрите сайт глазами тарифа <b>«${esc(App.viewTariff.name)}»</b></span>
+      <button class="btn sm" id="preview-exit">Выйти из просмотра</button>` : "";
+    $("#preview-exit")?.addEventListener("click", () => App.setViewTariff(null));
     $("#burger").onclick = () => document.body.classList.toggle("menu-open");
     $("#overlay").onclick = () => document.body.classList.remove("menu-open");
     $("#back").onclick = () => history.back();
@@ -253,16 +309,17 @@ window.App = (() => {
   // ---------- роутер ----------
   function route() {
     const [name, ...rest] = location.hash.replace(/^#\/?/, "").split("/");
-    return { name: App.pages[name] ? name : "dashboard", arg: rest.join("/") };
+    return { name: App.pages[name] ? name : (App.me ? App.home() : "dashboard"), arg: rest.join("/") };
   }
   let renderSeq = 0;
   async function render() {
     if (!App.me) return;
     const { name, arg } = route();
     const p = App.pages[name];
-    if (p.admin && App.me.role !== "admin") { location.hash = "#/dashboard"; return; }
+    const blocked = (p.admin && !isAdmin()) || (p.feature && !App.can(...[].concat(p.feature)));
+    if (blocked) { location.hash = "#/" + App.home(); return; }
     const crumbs = ["Главная", ...(p.crumbs || [])];
-    $("#crumbs").innerHTML = crumbs.map((c, i) => i === 0 && crumbs.length > 1 ? `<a href="#/dashboard">${c}</a>` : esc(c)).join('<span class="sep">/</span>');
+    $("#crumbs").innerHTML = crumbs.map((c, i) => i === 0 && crumbs.length > 1 ? `<a href="#/${App.home()}">${c}</a>` : esc(c)).join('<span class="sep">/</span>');
     const el = $("#page");
     const seq = ++renderSeq;
     el.innerHTML = App.loading();
@@ -284,24 +341,27 @@ window.App = (() => {
   App.route = route;
 
   // ---------- вход / регистрация ----------
-  function showAuth(mode = "login") {
+  function showAuth(mode = "login", invite = null) {
     $("#layout").hidden = true; $("#fab").hidden = true;
     const s = App.cfg?.settings || {};
     const el = $("#auth");
     el.hidden = false;
     const reg = mode === "register";
+    const canSwitch = s.allow_registration || invite;
     el.innerHTML = `<div class="auth-wrap"><form class="card auth-card" id="auth-form">
       <div class="brand" style="justify-content:center"><span class="logo">${esc(s.logo_text || "")}</span><span>${esc(s.brand_name || "")} <b>${esc(s.brand_accent || "")}</b></span></div>
+      ${invite ? `<div class="notice">${icon("gift")}<div>Доступ к <b>«${esc(invite.tariff)}»</b>. ${reg ? "Зарегистрируйтесь" : "Войдите"}, чтобы начать.</div></div>` : ""}
       <h2>${reg ? "Регистрация" : "Вход в кабинет"}</h2>
       <div class="field"><label>Email</label><input class="input" name="email" type="email" autocomplete="email" required></div>
       <div class="field"><label>Пароль</label><input class="input" name="password" type="password" minlength="${reg ? 8 : 1}" autocomplete="${reg ? "new-password" : "current-password"}" required></div>
       ${reg ? `<div class="field"><label>Telegram (необязательно)</label><input class="input" name="username" placeholder="@username"></div>` : ""}
       <div class="form-error"></div>
       <button class="btn primary block" type="submit">${reg ? "Зарегистрироваться" : "Войти"}</button>
-      ${s.allow_registration ? `<p class="hint center">${reg ? "Уже есть аккаунт?" : "Нет аккаунта?"} <a href="#" class="link-btn" id="auth-switch">${reg ? "Войти" : "Зарегистрироваться"}</a></p>` : ""}
+      ${canSwitch ? `<p class="hint center">${reg ? "Уже есть аккаунт?" : "Нет аккаунта?"} <a href="#" class="link-btn" id="auth-switch">${reg ? "Войти" : "Зарегистрироваться"}</a></p>` : ""}
     </form></div>`;
-    $("#auth-switch")?.addEventListener("click", (e) => { e.preventDefault(); showAuth(reg ? "login" : "register"); });
+    $("#auth-switch")?.addEventListener("click", (e) => { e.preventDefault(); showAuth(reg ? "login" : "register", invite); });
     App.onSubmit($("#auth-form"), async (d) => {
+      if (reg && invite) d.invite = invite.code;
       App.me = await App.post(reg ? "/api/auth/register" : "/api/auth/login", d);
       await boot();
     });
@@ -311,7 +371,14 @@ window.App = (() => {
   async function boot() {
     const cfg = await App.get("/api/config");
     App.cfg = cfg; App.me = cfg.me;
-    if (!App.me) return showAuth();
+    if (!App.me) {
+      const r = route();
+      if (r.name === "join" && r.arg) {
+        try { const inv = await App.get(`/api/invite/${encodeURIComponent(r.arg)}`); return showAuth("register", { ...inv, code: r.arg }); }
+        catch { /* ссылка недействительна — обычный вход */ }
+      }
+      return showAuth();
+    }
     $("#auth").hidden = true; $("#auth").innerHTML = "";
     $("#layout").hidden = false; $("#fab").hidden = false;
     renderShell();

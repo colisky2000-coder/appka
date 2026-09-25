@@ -5,7 +5,7 @@ from datetime import timedelta
 from flask import request
 from sqlalchemy import func, update
 
-from . import partner_api, telegram
+from . import features, partner_api, telegram
 from .db import db, utcnow
 from .models import (
     CONVERSION_STATUSES, BalanceTx, Conversion, Offer, OfferLink, Tariff, User,
@@ -33,6 +33,8 @@ def ser_user(u, admin=False):
         "tariff": ser_tariff(u.tariff) if u.tariff else None, "tariff_until": iso(u.tariff_until),
         "links_access": u.links_access, "telegram_linked": bool(u.chat_id),
         "show_in_top": u.show_in_top, "notify": u.notify, "created_at": iso(u.created_at),
+        "features": features.user_features(u),
+        "program_id": u.tariff.program_id if u.tariff else None,
     }
     if admin:
         d.update(is_blocked=u.is_blocked, admin_note=u.admin_note, chat_id=u.chat_id)
@@ -42,7 +44,8 @@ def ser_user(u, admin=False):
 def ser_tariff(t):
     return {"id": t.id, "code": t.code, "name": t.name, "price": rub(t.price), "period_days": t.period_days,
             "rate": t.rate, "description": t.description, "level": t.level,
-            "is_default": t.is_default, "is_public": t.is_public}
+            "is_default": t.is_default, "is_public": t.is_public,
+            "features": features.parse(t.features), "program_id": t.program_id}
 
 
 def default_tariff():

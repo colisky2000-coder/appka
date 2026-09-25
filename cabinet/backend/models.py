@@ -22,6 +22,14 @@ CONVERSION_STATUSES = {
 TOP_STATUSES = ("hold", "approved", "paid")
 
 
+class CoverMixin:
+    """Превью-картинка: загруженный файл (cover_data) или внешняя ссылка (cover_url)."""
+    cover_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    cover_mime: Mapped[str] = mapped_column(String(60), default="")
+    cover_url: Mapped[str] = mapped_column(Text, default="")
+    cover_v: Mapped[int] = mapped_column(Integer, default=0)
+
+
 class Tariff(Base):
     __tablename__ = "tariffs"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -34,6 +42,13 @@ class Tariff(Base):
     level: Mapped[int] = mapped_column(Integer, default=0)  # чем больше, тем выше тариф
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
     is_public: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Разделы сайта, включённые в тариф (JSON-список ключей из features.FEATURES).
+    # Пустая строка — «не настроено»: действуют разделы по умолчанию.
+    features: Mapped[str] = mapped_column(Text, default="")
+    program_id: Mapped[Optional[int]] = mapped_column(ForeignKey("programs.id", ondelete="SET NULL"), nullable=True)
+    invite_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    invite_code: Mapped[str] = mapped_column(String(40), default="", index=True)
+    invite_days: Mapped[int] = mapped_column(Integer, default=0)  # срок доступа по приглашению, 0 — бессрочно
 
 
 class User(Base):
@@ -149,7 +164,7 @@ class Conversion(Base):
     offer: Mapped[Optional[Offer]] = relationship()
 
 
-class Article(Base):
+class Article(CoverMixin, Base):
     __tablename__ = "articles"
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
@@ -158,12 +173,13 @@ class Article(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     url: Mapped[str] = mapped_column(Text, default="")  # если задан — статья ведёт на внешнюю ссылку
     min_tariff_id: Mapped[Optional[int]] = mapped_column(ForeignKey("tariffs.id", ondelete="SET NULL"), nullable=True)
+    show_in_manuals: Mapped[bool] = mapped_column(Boolean, default=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)
     sort: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
-class Material(Base):
+class Material(CoverMixin, Base):
     __tablename__ = "materials"
     id: Mapped[int] = mapped_column(primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
@@ -174,6 +190,7 @@ class Material(Base):
     size: Mapped[int] = mapped_column(Integer, default=0)
     # Файл хранится в БД — переживает редеплой на хостингах с временным диском.
     data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True, deferred=True)
+    show_in_manuals: Mapped[bool] = mapped_column(Boolean, default=True)
     sort: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -274,3 +291,85 @@ class TicketMessage(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+# ================= Обучение =================
+class Program(CoverMixin, Base):
+    """Обучающая программа (курс). Привязывается к тарифу."""
+    __tablename__ = "programs"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Lesson(CoverMixin, Base):
+    __tablename__ = "lessons"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    program_id: Mapped[int] = mapped_column(ForeignKey("programs.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    video_url: Mapped[str] = mapped_column(Text, default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    duration: Mapped[str] = mapped_column(String(40), default="")  # «15 мин» — для карточки
+    is_published: Mapped[bool] = mapped_column(Boolean, default=True)
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class Step(Base):
+    """Точка роадмапа. Внутри — задачи; может вести на урок, статью или ссылку."""
+    __tablename__ = "steps"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    program_id: Mapped[int] = mapped_column(ForeignKey("programs.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(200))
+    description: Mapped[str] = mapped_column(Text, default="")
+    target_type: Mapped[str] = mapped_column(String(16), default="")  # "" | lesson | article | material | url
+    target_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    target_url: Mapped[str] = mapped_column(Text, default="")
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+
+    tasks: Mapped[list["StepTask"]] = relationship(
+        order_by="StepTask.sort, StepTask.id", cascade="all, delete-orphan", passive_deletes=True)
+
+
+class StepTask(Base):
+    __tablename__ = "step_tasks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    step_id: Mapped[int] = mapped_column(ForeignKey("steps.id", ondelete="CASCADE"), index=True)
+    text: Mapped[str] = mapped_column(String(500))
+    sort: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class TaskDone(Base):
+    __tablename__ = "task_done"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("step_tasks.id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class StepDone(Base):
+    """Отметка для шага без задач."""
+    __tablename__ = "step_done"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    step_id: Mapped[int] = mapped_column(ForeignKey("steps.id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class LessonDone(Base):
+    __tablename__ = "lesson_done"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    lesson_id: Mapped[int] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class ArticleProgram(Base):
+    """Где показывать статью: в каких программах обучения."""
+    __tablename__ = "article_programs"
+    article_id: Mapped[int] = mapped_column(ForeignKey("articles.id", ondelete="CASCADE"), primary_key=True)
+    program_id: Mapped[int] = mapped_column(ForeignKey("programs.id", ondelete="CASCADE"), primary_key=True)
+
+
+class MaterialProgram(Base):
+    __tablename__ = "material_programs"
+    material_id: Mapped[int] = mapped_column(ForeignKey("materials.id", ondelete="CASCADE"), primary_key=True)
+    program_id: Mapped[int] = mapped_column(ForeignKey("programs.id", ondelete="CASCADE"), primary_key=True)

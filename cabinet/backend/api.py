@@ -4,18 +4,19 @@ import io
 from datetime import timedelta
 
 from flask import Blueprint, Response, g, make_response, request, send_file
-from sqlalchemy import func, or_
+from sqlalchemy import func, or_, select
 
-from . import settings, telegram
+from . import features, media, settings, telegram
+from .features import require
 from .auth import (
     COOKIE, admin_required, check_password, check_rate, client_ip, hash_password, login_required,
     reset_rate, set_cookie, start_session, validate_password,
 )
 from .db import db, utcnow
 from .models import (
-    CONVERSION_STATUSES, Article, BalanceTx, Click, Conversion, Favorite, Material, News, NewsRead,
-    Offer, OfferLink, Purchase, Tariff, TeamMember, Ticket, TicketMessage, TopUpRequest, TrafficRow,
-    User, UserSession,
+    CONVERSION_STATUSES, Article, ArticleProgram, BalanceTx, Click, Conversion, Favorite, Lesson, LessonDone,
+    Material, MaterialProgram, News, NewsRead, Offer, OfferLink, Program, Purchase, Step, StepDone, StepTask,
+    Tariff, TaskDone, TeamMember, Ticket, TicketMessage, TopUpRequest, TrafficRow, User, UserSession,
 )
 from .services import (
     change_balance, create_conversion, default_tariff, issue_link, link_counts, money_summary,
@@ -30,9 +31,6 @@ def body():
     return request.get_json(silent=True) or {}
 
 
-def section(name):
-    if not settings.get_bool(f"section_{name}") and not (g.user and g.user.is_admin):
-        raise ApiError("Раздел отключён администратором", 404)
 
 
 # ================= auth =================
@@ -45,10 +43,11 @@ def config():
 
 @bp.post("/auth/register")
 def register():
-    if not settings.get_bool("allow_registration"):
+    d = body()
+    invite = invite_tariff(d["invite"]) if d.get("invite") else None
+    if not invite and not settings.get_bool("allow_registration"):
         raise ApiError("Регистрация закрыта. Обратитесь к администратору", 403)
     check_rate("reg:" + client_ip())
-    d = body()
     email = clean_email(d.get("email"))
     validate_password(d.get("password"))
     if db.query(User).filter_by(email=email).first():
@@ -57,6 +56,8 @@ def register():
     u = User(email=email, password_hash=hash_password(d["password"]),
              username=clean_str(d.get("username"), "Telegram", 64).lstrip("@"),
              tariff_id=t.id if t else None, links_access=settings.get_bool("default_links_access"))
+    if invite:
+        apply_invite(u, invite)
     db.add(u)
     db.flush()
     token = start_session(u)
@@ -178,6 +179,7 @@ def telegram_unlink():
 @bp.get("/dashboard")
 @login_required
 def dashboard():
+    require("dashboard")
     u = g.user
     since = utcnow() - timedelta(days=30)
     clicks30 = (db.query(func.count(Click.id)).join(OfferLink, OfferLink.id == Click.link_id)
@@ -207,6 +209,7 @@ def unread_count(u):
 @bp.get("/news")
 @login_required
 def news_list():
+    require("dashboard")
     read = {r[0] for r in db.query(NewsRead.news_id).filter_by(user_id=g.user.id)}
     items = db.query(News).order_by(News.created_at.desc()).limit(50).all()
     return ok([{"id": n.id, "title": n.title, "body": n.body, "created_at": iso(n.created_at), "read": n.id in read} for n in items])
@@ -233,59 +236,288 @@ def news_read_all():
 
 
 # ================= база знаний =================
-def visible_articles():
+def user_program_id():
+    """Программа обучения пользователя (из тарифа). Админ может открыть любую: ?program=ID."""
+    if g.user.is_admin:
+        pid = request.args.get("program", type=int)
+        if pid:
+            return pid
+        if g.user.tariff and g.user.tariff.program_id:
+            return g.user.tariff.program_id
+        first = db.query(Program.id).order_by(Program.id).first()
+        return first[0] if first else None
+    if not features.has(g.user, "learning") or not g.user.tariff:
+        return None
+    return g.user.tariff.program_id
+
+
+def manuals_articles():
     level = g.user.tariff.level if g.user.tariff else 0
-    q = db.query(Article).outerjoin(Tariff, Tariff.id == Article.min_tariff_id)
+    q = db.query(Article).outerjoin(Tariff, Tariff.id == Article.min_tariff_id).filter(Article.show_in_manuals.is_(True))
     if not g.user.is_admin:
         q = q.filter(Article.is_published.is_(True), or_(Article.min_tariff_id.is_(None), Tariff.level <= level))
     return q
 
 
+def program_articles(pid):
+    q = db.query(Article).filter(Article.id.in_(select(ArticleProgram.article_id).where(ArticleProgram.program_id == pid)))
+    if not g.user.is_admin:
+        q = q.filter(Article.is_published.is_(True))
+    return q
+
+
+def program_materials(pid):
+    return db.query(Material).filter(Material.id.in_(select(MaterialProgram.material_id).where(MaterialProgram.program_id == pid)))
+
+
+def ser_article(a):
+    return {"id": a.id, "kind": "article", "title": a.title, "description": a.description, "category": a.category,
+            "url": a.url, "cover": media.cover_link("articles", a), "created_at": iso(a.created_at)}
+
+
+def ser_material(m):
+    return {"id": m.id, "kind": "material", "title": m.title, "description": m.description, "url": m.url,
+            "filename": m.filename, "size": m.size, "cover": media.cover_link("materials", m),
+            "download": f"/api/materials/{m.id}/download" if m.filename else "", "created_at": iso(m.created_at)}
+
+
+def can_view_article(a):
+    if features.has(g.user, "manuals") and manuals_articles().filter(Article.id == a.id).first():
+        return True
+    pid = user_program_id()
+    return bool(pid and program_articles(pid).filter(Article.id == a.id).first())
+
+
+def can_view_material(m):
+    if g.user.is_admin or (features.has(g.user, "manuals") and m.show_in_manuals):
+        return True
+    pid = user_program_id()
+    return bool(pid and program_materials(pid).filter(Material.id == m.id).first())
+
+
 @bp.get("/articles")
 @login_required
 def articles():
-    section("manuals")
-    items = visible_articles().order_by(Article.sort, Article.created_at.desc()).all()
-    return ok([{"id": a.id, "title": a.title, "description": a.description, "category": a.category,
-                "url": a.url, "created_at": iso(a.created_at)} for a in items])
+    require("manuals")
+    items = manuals_articles().order_by(Article.sort, Article.created_at.desc()).all()
+    return ok([ser_article(a) for a in items])
 
 
 @bp.get("/articles/<int:aid>")
 @login_required
 def article(aid):
-    section("manuals")
-    a = visible_articles().filter(Article.id == aid).first()
-    if not a:
+    a = db.get(Article, aid)
+    if not a or not can_view_article(a):
         raise ApiError("Статья не найдена", 404)
-    return ok({"id": a.id, "title": a.title, "description": a.description, "category": a.category,
-               "body": a.body, "url": a.url, "created_at": iso(a.created_at)})
+    return ok({**ser_article(a), "body": a.body})
 
 
 @bp.get("/materials")
 @login_required
 def materials():
-    section("manuals")
-    items = db.query(Material).order_by(Material.sort, Material.created_at.desc()).all()
-    return ok([{"id": m.id, "title": m.title, "description": m.description, "url": m.url,
-                "filename": m.filename, "size": m.size, "created_at": iso(m.created_at)} for m in items])
+    require("manuals")
+    items = db.query(Material).filter(Material.show_in_manuals.is_(True)).order_by(Material.sort, Material.created_at.desc()).all()
+    return ok([ser_material(m) for m in items])
 
 
 @bp.get("/materials/<int:mid>/download")
 @login_required
 def material_download(mid):
-    section("manuals")
     m = db.get(Material, mid)
-    if not m or not m.filename:
+    if not m or not m.filename or not can_view_material(m):
         raise ApiError("Файл не найден", 404)
     return send_file(io.BytesIO(m.data or b""), mimetype=m.mime or "application/octet-stream",
                      as_attachment=True, download_name=m.filename)
+
+
+# ================= обучение =================
+def current_program():
+    require("learning")
+    pid = user_program_id()
+    p = db.get(Program, pid) if pid else None
+    if not p:
+        raise ApiError("Для вашего тарифа программа обучения ещё не назначена", 404)
+    return p
+
+
+def program_lessons(p):
+    q = db.query(Lesson).filter_by(program_id=p.id)
+    if not g.user.is_admin:
+        q = q.filter(Lesson.is_published.is_(True))
+    return q.order_by(Lesson.sort, Lesson.id).all()
+
+
+def progress_sets(uid):
+    return ({r[0] for r in db.query(TaskDone.task_id).filter_by(user_id=uid)},
+            {r[0] for r in db.query(StepDone.step_id).filter_by(user_id=uid)},
+            {r[0] for r in db.query(LessonDone.lesson_id).filter_by(user_id=uid)})
+
+
+def step_target(s, lessons_by_id, nums):
+    t = s.target_type
+    if t == "lesson" and s.target_id in lessons_by_id:
+        l = lessons_by_id[s.target_id]
+        return {"type": "lesson", "id": l.id, "title": f"Урок {nums[l.id]}. {l.title}"}
+    if t == "article" and s.target_id:
+        a = db.get(Article, s.target_id)
+        if a:
+            return {"type": "article", "id": a.id, "title": a.title, "url": a.url}
+    if t == "material" and s.target_id:
+        m = db.get(Material, s.target_id)
+        if m:
+            return {"type": "material", "id": m.id, "title": m.title,
+                    "url": f"/api/materials/{m.id}/download" if m.filename else m.url}
+    if t == "url" and s.target_url:
+        return {"type": "url", "url": s.target_url, "title": s.target_url}
+    return None
+
+
+@bp.get("/learn")
+@login_required
+def learn():
+    p = current_program()
+    lessons = program_lessons(p)
+    nums = {l.id: i for i, l in enumerate(lessons, 1)}
+    by_id = {l.id: l for l in lessons}
+    tasks_done, steps_done, lessons_done = progress_sets(g.user.id)
+    steps = []
+    for s in db.query(Step).filter_by(program_id=p.id).order_by(Step.sort, Step.id).all():
+        tasks = [{"id": t.id, "text": t.text, "done": t.id in tasks_done} for t in s.tasks]
+        done = all(t["done"] for t in tasks) if tasks else s.id in steps_done
+        steps.append({"id": s.id, "title": s.title, "description": s.description, "tasks": tasks, "done": done,
+                      "target": step_target(s, by_id, nums)})
+    current = next((s["id"] for s in steps if not s["done"]), None)
+    next_lesson = next((l.id for l in lessons if l.id not in lessons_done), None)
+    return ok({
+        "program": {"id": p.id, "title": p.title, "description": p.description, "cover": media.cover_link("programs", p)},
+        "steps": steps,
+        "lessons": [{"id": l.id, "num": nums[l.id], "title": l.title, "duration": l.duration,
+                     "cover": media.cover_link("lessons", l), "has_video": bool(l.video_url),
+                     "done": l.id in lessons_done, "is_published": l.is_published} for l in lessons],
+        "progress": {"steps_done": sum(s["done"] for s in steps), "steps_total": len(steps),
+                     "lessons_done": sum(l.id in lessons_done for l in lessons), "lessons_total": len(lessons)},
+        "current_step_id": current, "next_lesson_id": next_lesson,
+    })
+
+
+def get_lesson(p, lid):
+    lessons = program_lessons(p)
+    idx = next((i for i, l in enumerate(lessons) if l.id == lid), None)
+    if idx is None:
+        raise ApiError("Урок не найден", 404)
+    return lessons, idx
+
+
+@bp.get("/lessons/<int:lid>")
+@login_required
+def lesson(lid):
+    p = current_program()
+    lessons, i = get_lesson(p, lid)
+    l = lessons[i]
+    tasks_done, steps_done, lessons_done = progress_sets(g.user.id)
+    todo = []
+    for s in db.query(Step).filter_by(program_id=p.id, target_type="lesson", target_id=l.id).order_by(Step.sort, Step.id):
+        if s.tasks:
+            todo += [{"kind": "task", "id": t.id, "text": t.text, "done": t.id in tasks_done} for t in s.tasks]
+    return ok({"id": l.id, "num": i + 1, "total": len(lessons), "title": l.title, "body": l.body,
+               "duration": l.duration, "video_url": l.video_url, "embed": media.video_embed(l.video_url),
+               "cover": media.cover_link("lessons", l), "done": l.id in lessons_done,
+               "prev_id": lessons[i - 1].id if i > 0 else None,
+               "next_id": lessons[i + 1].id if i + 1 < len(lessons) else None,
+               "todo": todo, "program": {"id": p.id, "title": p.title}})
+
+
+def set_flag(model, field, obj_id, done):
+    """Ставит/снимает отметку «сделано» (TaskDone / StepDone / LessonDone)."""
+    row = db.get(model, (g.user.id, obj_id))
+    if done and not row:
+        db.add(model(user_id=g.user.id, **{field: obj_id}))
+    elif not done and row:
+        db.delete(row)
+
+
+@bp.post("/lessons/<int:lid>/done")
+@login_required
+def lesson_done(lid):
+    p = current_program()
+    get_lesson(p, lid)
+    done = bool(body().get("done", True))
+    set_flag(LessonDone, "lesson_id", lid, done)
+    # Шаги без задач, которые ведут на этот урок, отмечаются вместе с уроком
+    for s in db.query(Step).filter_by(program_id=p.id, target_type="lesson", target_id=lid):
+        if not s.tasks:
+            set_flag(StepDone, "step_id", s.id, done)
+    db.commit()
+    return ok()
+
+
+@bp.post("/tasks/<int:tid>/done")
+@login_required
+def task_done(tid):
+    p = current_program()
+    t = db.get(StepTask, tid)
+    if not t or db.get(Step, t.step_id).program_id != p.id:
+        raise ApiError("Задача не найдена", 404)
+    set_flag(TaskDone, "task_id", tid, bool(body().get("done", True)))
+    db.commit()
+    return ok()
+
+
+@bp.post("/steps/<int:sid>/done")
+@login_required
+def step_done(sid):
+    p = current_program()
+    s = db.get(Step, sid)
+    if not s or s.program_id != p.id:
+        raise ApiError("Шаг не найден", 404)
+    if s.tasks:
+        raise ApiError("У шага есть задачи — отмечайте их")
+    set_flag(StepDone, "step_id", sid, bool(body().get("done", True)))
+    db.commit()
+    return ok()
+
+
+@bp.get("/learn/materials")
+@login_required
+def learn_materials():
+    p = current_program()
+    arts = program_articles(p.id).order_by(Article.sort, Article.created_at.desc()).all()
+    mats = program_materials(p.id).order_by(Material.sort, Material.created_at.desc()).all()
+    return ok([ser_article(a) for a in arts] + [ser_material(m) for m in mats])
+
+
+# ================= приглашения =================
+def invite_tariff(code):
+    t = db.query(Tariff).filter_by(invite_code=code, invite_enabled=True).first() if code else None
+    if not t:
+        raise ApiError("Ссылка-приглашение недействительна", 404)
+    return t
+
+
+def apply_invite(user, t):
+    user.tariff_id = t.id
+    user.tariff_until = utcnow() + timedelta(days=t.invite_days) if t.invite_days else None
+
+
+@bp.get("/invite/<code>")
+def invite_info(code):
+    t = invite_tariff(code)
+    return ok({"tariff": t.name, "description": t.description, "days": t.invite_days})
+
+
+@bp.post("/invite/<code>/activate")
+@login_required
+def invite_activate(code):
+    apply_invite(g.user, invite_tariff(code))
+    db.commit()
+    return ok(ser_user(g.user))
 
 
 # ================= партнёрка =================
 @bp.get("/offers")
 @login_required
 def offers():
-    section("partner")
+    require("offers", "favorites", "conversions", "stats")
     u = g.user
     items = db.query(Offer).filter_by(is_active=True).order_by(Offer.sort, Offer.id).all()
     favs = {f.offer_id for f in db.query(Favorite).filter_by(user_id=u.id)}
@@ -311,6 +543,7 @@ def get_offer(oid):
 @bp.post("/offers/<int:oid>/favorite")
 @login_required
 def toggle_favorite(oid):
+    require("offers", "favorites")
     get_offer(oid)
     f = db.get(Favorite, (g.user.id, oid))
     if f:
@@ -324,7 +557,7 @@ def toggle_favorite(oid):
 @bp.post("/offers/<int:oid>/link")
 @login_required
 def get_link(oid):
-    section("partner")
+    require("offers", "favorites")
     if not g.user.links_access:
         raise ApiError("Доступ к ссылкам ещё не открыт — отправьте заявку на доступ", 403)
     link = issue_link(g.user, get_offer(oid))
@@ -335,6 +568,7 @@ def get_link(oid):
 @bp.patch("/links/<int:lid>")
 @login_required
 def update_link(lid):
+    require("offers", "favorites")
     link = db.query(OfferLink).filter_by(id=lid, user_id=g.user.id).first()
     if not link:
         raise ApiError("Ссылка не найдена", 404)
@@ -350,6 +584,7 @@ def update_link(lid):
 @bp.get("/links")
 @login_required
 def my_links():
+    require("offers", "favorites")
     links = db.query(OfferLink).filter_by(user_id=g.user.id).order_by(OfferLink.created_at.desc()).all()
     ids = [l.id for l in links]
     clicks = dict(db.query(Click.link_id, func.count(Click.id)).filter(Click.link_id.in_(ids)).group_by(Click.link_id).all()) if ids else {}
@@ -360,6 +595,7 @@ def my_links():
 @bp.post("/access-request")
 @login_required
 def access_request():
+    require("offers", "favorites")
     if g.user.links_access:
         return ok({"already": True})
     exists = db.query(Ticket).filter_by(user_id=g.user.id, topic="access").filter(Ticket.status != "closed").first()
@@ -395,6 +631,7 @@ def conversions_query(args, user_id=None):
 @bp.get("/conversions")
 @login_required
 def conversions():
+    require("conversions")
     q = conversions_query(request.args, g.user.id).order_by(Conversion.created_at.desc())
     return ok([ser_conversion(c) for c in q.limit(500).all()])
 
@@ -402,6 +639,7 @@ def conversions():
 @bp.post("/conversions")
 @login_required
 def create_conv():
+    require("conversions")
     d = body()
     offer = get_offer(int(d.get("offer_id") or 0))
     link = db.query(OfferLink).filter_by(user_id=g.user.id, offer_id=offer.id).first()
@@ -471,14 +709,14 @@ def stats_data(args, user):
 @bp.get("/stats")
 @login_required
 def stats():
-    section("partner")
+    require("stats")
     return ok(stats_data(request.args, g.user))
 
 
 @bp.get("/stats.csv")
 @login_required
 def stats_csv():
-    section("partner")
+    require("stats")
     data = stats_data(request.args, g.user)
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
@@ -492,6 +730,7 @@ def stats_csv():
 @bp.get("/income")
 @login_required
 def income():
+    require("income")
     q = db.query(Conversion).filter(Conversion.user_id == g.user.id)
     recent = q.filter(Conversion.status.in_(("hold", "approved", "paid"))).order_by(Conversion.status_changed_at.desc()).limit(100).all()
     tx = db.query(BalanceTx).filter_by(user_id=g.user.id).order_by(BalanceTx.created_at.desc()).limit(100).all()
@@ -508,7 +747,7 @@ def traffic_price():
 @bp.get("/traffic")
 @login_required
 def traffic():
-    section("traffic")
+    require("traffic")
     purchases = db.query(Purchase).filter_by(user_id=g.user.id).order_by(Purchase.created_at.desc()).all()
     topups = db.query(TopUpRequest).filter_by(user_id=g.user.id).order_by(TopUpRequest.created_at.desc()).limit(20).all()
     return ok({
@@ -525,7 +764,7 @@ def traffic():
 @bp.post("/traffic/buy")
 @login_required
 def traffic_buy():
-    section("traffic")
+    require("traffic")
     try:
         n = int(body().get("rows"))
     except (TypeError, ValueError):
@@ -564,6 +803,7 @@ def purchase_download(pid):
 @bp.post("/topups")
 @login_required
 def topup_request():
+    require("traffic")
     d = body()
     amount = to_kop(d.get("amount"))
     if amount < 100:
@@ -579,7 +819,7 @@ def topup_request():
 @bp.get("/tariffs")
 @login_required
 def tariffs():
-    section("billing")
+    require("billing")
     items = db.query(Tariff).filter_by(is_public=True).order_by(Tariff.level, Tariff.id).all()
     return ok({"tariffs": [ser_tariff(t) for t in items], "current": g.user.tariff_id,
                "until": iso(g.user.tariff_until), "balance": rub(g.user.balance)})
@@ -588,7 +828,7 @@ def tariffs():
 @bp.post("/tariffs/<int:tid>/buy")
 @login_required
 def tariff_buy(tid):
-    section("billing")
+    require("billing")
     t = db.get(Tariff, tid)
     if not t or not t.is_public:
         raise ApiError("Тариф не найден", 404)
@@ -618,6 +858,7 @@ def ser_ticket(t, messages=False, admin=False):
 @bp.get("/tickets")
 @login_required
 def tickets():
+    require("support")
     q = db.query(Ticket).filter_by(user_id=g.user.id)
     if request.args.get("topic"):
         q = q.filter_by(topic=request.args["topic"])
@@ -627,6 +868,7 @@ def tickets():
 @bp.post("/tickets")
 @login_required
 def ticket_create():
+    require("support")
     d = body()
     topic = d.get("topic") if d.get("topic") in ("general", "conversion") else "general"
     conv_id = None
@@ -643,6 +885,7 @@ def ticket_create():
 
 
 def own_ticket(tid):
+    require("support")
     t = db.query(Ticket).filter_by(id=tid, user_id=g.user.id).first()
     if not t:
         raise ApiError("Обращение не найдено", 404)

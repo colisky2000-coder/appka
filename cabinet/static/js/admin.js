@@ -1,6 +1,6 @@
 /* Админка: управление пользователями, контентом, заявками, трафиком и настройками. */
 (() => {
-  const { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, qs, icon, linkify } = App;
+  const { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, qs, icon, linkify, cover } = App;
   const P = App.pages;
 
   App.adminMenu = [
@@ -8,6 +8,7 @@
     { id: "a-users", label: "Пользователи", icon: "users" },
     { id: "a-conversions", label: "Заявки", icon: "file", badge: true },
     { id: "a-links", label: "Ссылки", icon: "link", badge: true },
+    { id: "a-learning", label: "Обучение", icon: "trend" },
     { id: "a-offers", label: "Офферы", icon: "handshake" },
     { id: "a-topups", label: "Пополнения", icon: "card", badge: true },
     { id: "a-traffic", label: "Трафик", icon: "cart" },
@@ -39,14 +40,23 @@
   let schemaCache = null;
   const loadSchema = async () => (schemaCache = schemaCache || await App.get("/api/admin/schema"));
 
+  let programsCache = null;
+  const loadPrograms = async (force) => (programsCache = (!force && programsCache) || await App.get("/api/admin/r/programs"));
+  const resetCaches = (res) => { if (res === "tariffs") tariffsCache = null; if (res === "programs") programsCache = null; };
+
   // ---------- конструктор полей формы ----------
-  function fieldHtml(f, value) {
-    const v = value ?? (f.type === "bool" ? ["is_active", "is_published", "is_public"].includes(f.name) : "");
+  const checks = (name, options, selected) => `<div class="checks">${options.map(([val, label]) =>
+    `<label class="check"><input type="checkbox" name="${name}" value="${esc(val)}" ${selected.includes(val) ? "checked" : ""}><span>${esc(label)}</span></label>`).join("")}</div>`;
+
+  function fieldHtml(f, value, isNew) {
+    const defTrue = ["is_active", "is_published", "is_public", "show_in_manuals"].includes(f.name);
+    const v = value ?? (f.type === "bool" ? defTrue : "");
     const req = f.required ? "required" : "";
     const lbl = `${esc(f.label)}${f.required ? " *" : ""}`;
     switch (f.type) {
       case "text":
-        return `<div class="field"><label>${lbl}</label><textarea class="input" name="${f.name}" rows="${f.name === "body" ? 10 : 4}" ${req}>${esc(v)}</textarea></div>`;
+        return `<div class="field"><label>${lbl}</label><textarea class="input" name="${f.name}" rows="${f.name === "body" ? 10 : 4}" ${req}>${esc(v)}</textarea>
+          ${f.name === "body" ? `<span class="hint">Форматирование: «# Заголовок», «## Подзаголовок», «- пункт списка», **жирный**. Ссылки становятся кликабельными.</span>` : ""}</div>`;
       case "bool":
         return `<label class="row gap8 mb"><span class="switch"><input type="checkbox" name="${f.name}" ${v ? "checked" : ""}><span></span></span>${lbl}</label>`;
       case "money":
@@ -56,6 +66,16 @@
       case "tariff":
         return `<div class="field"><label>${lbl}</label><select class="input" name="${f.name}"><option value="">— любой —</option>
           ${(tariffsCache || []).map((t) => `<option value="${t.id}" ${+v === t.id ? "selected" : ""}>${esc(t.name)} (уровень ${t.level})</option>`).join("")}</select></div>`;
+      case "program":
+        return `<div class="field"><label>${lbl}</label><select class="input" name="${f.name}" ${req}><option value="">— нет —</option>
+          ${(programsCache || []).map((p) => `<option value="${p.id}" ${+v === p.id ? "selected" : ""}>${esc(p.title)}</option>`).join("")}</select></div>`;
+      case "programs":
+        return (programsCache || []).length ? `<div class="field"><label>${lbl}</label>${checks(f.name, programsCache.map((p) => [String(p.id), p.title]), (v || []).map(String))}</div>` : "";
+      case "features": {
+        const sel = isNew ? schemaCache.features.map((x) => x.key).filter((k) => k !== "learning") : v || [];
+        return `<div class="field"><label>${lbl}</label>${checks(f.name, schemaCache.features.map((x) => [x.key, x.label]), sel)}
+          <span class="hint">Профиль, смена пароля и выход доступны всегда.</span></div>`;
+      }
       case "url":
         return `<div class="field"><label>${lbl}</label><input class="input" name="${f.name}" type="url" placeholder="https://" value="${esc(v)}" ${req}></div>`;
       default:
@@ -65,6 +85,11 @@
   function readForm(form, fields) {
     const out = {};
     for (const f of fields) {
+      if (f.type === "features" || f.type === "programs") {
+        const vals = $$(`input[name="${f.name}"]:checked`, form).map((i) => i.value);
+        out[f.name] = f.type === "programs" ? vals.map(Number) : vals;
+        continue;
+      }
       const inp = form.elements[f.name];
       if (!inp) continue;
       out[f.name] = f.type === "bool" ? inp.checked : inp.value;
@@ -72,82 +97,310 @@
     return out;
   }
 
-  // ---------- универсальная страница CRUD ----------
-  function crudPage(res, { title, sub, ic, columns, extra, beforeSave }) {
-    return {
-      admin: true, crumbs: ["Админка", title],
-      async render(el) {
-        const [schema, items] = await Promise.all([loadSchema(), App.get(`/api/admin/r/${res}`), loadTariffs()]);
-        el._data = { fields: schema[res], items };
-        el.innerHTML = `${App.pageHead(ic, title, sub)}
-          <div class="row mb"><button class="btn primary" id="add">${icon("plus")}Добавить</button>
-            <div class="input-icon w280">${icon("search")}<input class="input" id="flt" placeholder="Поиск"></div></div>
-          <div id="list"></div>`;
-      },
-      mount(el) {
-        const { fields, items } = el._data;
-        const draw = (q = "") => {
-          const list = items.filter((it) => JSON.stringify(it).toLowerCase().includes(q));
-          $("#list", el).innerHTML = list.length ? `<div class="table-wrap"><table><tr>${columns.map((c) => `<th>${c[0]}</th>`).join("")}<th></th></tr>
-            ${list.map((it) => `<tr class="clickable" data-id="${it.id}">${columns.map((c) => `<td>${c[1](it)}</td>`).join("")}
-              <td class="nowrap"><button class="btn sm ghost" data-edit="${it.id}" title="Изменить">${icon("edit")}</button><button class="btn sm ghost" data-del="${it.id}" title="Удалить">${icon("trash")}</button></td></tr>`).join("")}</table></div>`
-            : `<div class="card soft">${App.empty(ic, items.length ? "Ничего не найдено" : "Пока пусто", items.length ? "" : "Нажмите «Добавить».")}</div>`;
-          $$("[data-edit], tr.clickable", el).forEach((b) => b.onclick = (e) => {
-            if (e.target.closest("[data-del]")) return;
-            e.stopPropagation(); open(items.find((x) => x.id === +(b.dataset.edit || b.dataset.id)));
-          });
-          $$("[data-del]", el).forEach((b) => b.onclick = async (e) => {
-            e.stopPropagation();
-            if (!(await App.confirm("Удалить запись без возможности восстановления?", "Удалить"))) return;
-            try { await App.del(`/api/admin/r/${res}/${b.dataset.del}`); App.toast("Удалено"); if (res === "tariffs") tariffsCache = null; App.rerender(); } catch (ex) { App.fail(ex); }
-          });
-        };
-        const open = (item) => App.modal(item ? "Редактирование" : "Новая запись", `
-          <form id="cf">${fields.map((f) => fieldHtml(f, item?.[f.name])).join("")}${extra ? extra(item) : ""}
-            <div class="form-error"></div>
-            <div class="row"><button class="btn primary" type="submit">Сохранить</button><button type="button" class="btn" data-close>Отмена</button></div></form>`,
-          (m, close) => App.onSubmit($("#cf", m), async (_, form) => {
-            let data = readForm(form, fields);
-            if (beforeSave) data = beforeSave(data, form);
-            if (item) await App.put(`/api/admin/r/${res}/${item.id}`, data);
-            else await App.post(`/api/admin/r/${res}`, data);
-            if (res === "tariffs") tariffsCache = null;
-            close(); App.toast("Сохранено"); App.rerender();
-          }), { wide: true });
-        $("#add", el).onclick = () => open(null);
-        $("#flt", el).oninput = (e) => draw(e.target.value.toLowerCase().trim());
-        draw();
-      },
-    };
+  // ---------- превью в формах ----------
+  function coverFields(item, sourceLabel) {
+    return `<div class="field cover-edit"><label>Превью</label>
+      <div class="row top"><div class="cover-thumb" data-thumb>${cover(item?.cover, item?.title || item?.name)}</div>
+        <div class="flex1">
+          <input type="file" name="cover_file" accept="image/png,image/jpeg,image/webp,image/gif">
+          <input class="input mt8" name="cover_url" type="url" placeholder="…или ссылка на картинку https://">
+          ${sourceLabel ? `<label class="row gap8 mt8 small"><input type="checkbox" name="cover_auto" ${item?.cover ? "" : "checked"}>Подтянуть автоматически из ${esc(sourceLabel)}</label>` : ""}
+          ${item?.cover ? `<label class="row gap8 mt8 small"><input type="checkbox" name="cover_remove">Удалить превью</label>` : ""}
+          <span class="hint">JPG, PNG, WEBP до 5 МБ. Лучше горизонтальная 16:9.</span>
+        </div></div></div>`;
+  }
+  function bindCoverPreview(form) {
+    const f = form.elements.cover_file;
+    f?.addEventListener("change", () => {
+      if (f.files[0]) $("[data-thumb]", form).innerHTML = `<div class="cover"><img src="${URL.createObjectURL(f.files[0])}" alt=""></div>`;
+    });
+  }
+  async function applyCover(kind, id, form, sourceValue) {
+    const url = `/api/admin/cover/${kind}/${id}`;
+    const file = form.elements.cover_file?.files[0];
+    if (file) { const fd = new FormData(); fd.append("file", file); return App.api("POST", url, undefined, { form: fd }); }
+    const link = form.elements.cover_url?.value.trim();
+    if (link) return App.post(url, { url: link });
+    if (form.elements.cover_remove?.checked) return App.del(url);
+    if (form.elements.cover_auto?.checked && sourceValue) {
+      try { await App.post(url, { auto: true }); }
+      catch (e) { App.toast("Превью не подтянулось: " + e.message, true); }
+    }
   }
 
+  // ---------- универсальный список + форма ----------
+  // o: columns, hidden, defaults, filter, cover {kind, source, label}, reorder, rowHref, extra(item), onModal(m, item), bind(box, items)
+  async function crudBlock(box, res, o) {
+    await Promise.all([loadSchema(), loadTariffs(), loadPrograms()]);
+    const hidden = [...(o.hidden || []), ...(o.reorder ? ["sort"] : [])]; // порядок меняется стрелками
+    const fields = schemaCache.resources[res].filter((f) => !hidden.includes(f.name));
+    let items = [];
+    const load = async () => { const all = await App.get(`/api/admin/r/${res}`); items = o.filter ? all.filter(o.filter) : all; };
+    box.innerHTML = `<div class="row mb"><button class="btn primary" data-add>${icon("plus")}${esc(o.addLabel || "Добавить")}</button>
+      <div class="input-icon w280">${icon("search")}<input class="input" data-flt placeholder="Поиск"></div></div><div data-list></div>`;
+    const draw = () => {
+      const q = $("[data-flt]", box).value.toLowerCase().trim();
+      const list = items.filter((it) => JSON.stringify(it).toLowerCase().includes(q));
+      const canMove = o.reorder && !q;
+      $("[data-list]", box).innerHTML = list.length ? `<div class="table-wrap"><table><tr>${canMove ? "<th></th>" : ""}${o.columns.map((c) => `<th>${c[0]}</th>`).join("")}<th></th></tr>
+        ${list.map((it, i) => `<tr class="clickable" data-id="${it.id}">
+          ${canMove ? `<td class="nowrap move"><button class="btn sm ghost" data-up="${i}" ${i ? "" : "disabled"} title="Выше">${icon("up")}</button><button class="btn sm ghost" data-down="${i}" ${i < list.length - 1 ? "" : "disabled"} title="Ниже">${icon("down")}</button></td>` : ""}
+          ${o.columns.map((c) => `<td>${c[1](it)}</td>`).join("")}
+          <td class="nowrap"><button class="btn sm ghost" data-edit="${it.id}" title="Изменить">${icon("edit")}</button><button class="btn sm ghost" data-del="${it.id}" title="Удалить">${icon("trash")}</button></td></tr>`).join("")}</table></div>`
+        : `<div class="card soft">${App.empty(o.icon || "list", items.length ? "Ничего не найдено" : "Пока пусто", items.length ? "" : "Нажмите «Добавить».")}</div>`;
+      $$("tr.clickable", box).forEach((tr) => tr.onclick = (e) => {
+        if (e.target.closest("button, a, input, label")) return;
+        const it = items.find((x) => x.id === +tr.dataset.id);
+        if (o.rowHref) location.hash = o.rowHref(it); else open(it);
+      });
+      $$("[data-edit]", box).forEach((b) => b.onclick = () => open(items.find((x) => x.id === +b.dataset.edit)));
+      $$("[data-del]", box).forEach((b) => b.onclick = async () => {
+        if (!(await App.confirm(o.deleteText || "Удалить запись без возможности восстановления?", "Удалить"))) return;
+        try { await App.del(`/api/admin/r/${res}/${b.dataset.del}`); resetCaches(res); App.toast("Удалено"); await load(); draw(); } catch (ex) { App.fail(ex); }
+      });
+      const move = async (i, d) => {
+        const ids = list.map((x) => x.id); [ids[i], ids[i + d]] = [ids[i + d], ids[i]];
+        try { await App.post(`/api/admin/reorder/${res}`, { ids }); await load(); draw(); } catch (ex) { App.fail(ex); }
+      };
+      $$("[data-up]", box).forEach((b) => b.onclick = () => move(+b.dataset.up, -1));
+      $$("[data-down]", box).forEach((b) => b.onclick = () => move(+b.dataset.down, 1));
+      o.bind && o.bind(box, items);
+    };
+    const open = (item) => App.modal(item ? "Редактирование" : (o.addLabel || "Новая запись"), `
+      <form id="cf">${fields.map((f) => fieldHtml(f, item?.[f.name], !item)).join("")}
+        ${o.cover ? coverFields(item, o.cover.label) : ""}${o.extra ? o.extra(item) : ""}
+        <div class="form-error"></div>
+        <div class="row sticky-actions"><button class="btn primary" type="submit">Сохранить</button><button type="button" class="btn" data-close>Отмена</button></div></form>`,
+      (m, close) => {
+        const form = $("#cf", m);
+        bindCoverPreview(form);
+        o.onModal && o.onModal(m, item);
+        App.onSubmit(form, async () => {
+          const data = { ...readForm(form, fields), ...(o.defaults || {}), ...(o.beforeSave ? o.beforeSave(form) : {}) };
+          const saved = item ? await App.put(`/api/admin/r/${res}/${item.id}`, data) : await App.post(`/api/admin/r/${res}`, data);
+          if (o.cover) await applyCover(o.cover.kind, saved.id, form, o.cover.source ? data[o.cover.source] ?? item?.[o.cover.source] : "");
+          resetCaches(res);
+          close(); App.toast("Сохранено"); await load(); draw();
+        });
+      }, { wide: true });
+    $("[data-add]", box).onclick = () => open(null);
+    $("[data-flt]", box).oninput = draw;
+    await load(); draw();
+    return { reload: async () => { await load(); draw(); } };
+  }
+  function crudPage(res, o) {
+    return {
+      admin: true, crumbs: ["Админка", o.title],
+      async render(el) { el.innerHTML = `${App.pageHead(o.icon, o.title, o.sub)}<div data-crud></div>`; },
+      async mount(el) { await crudBlock($("[data-crud]", el), res, o); },
+    };
+  }
+  const thumb = (x) => `<div class="thumb-sm">${cover(x.cover, x.title || x.name)}</div>`;
+  const placeCol = (a) => [a.show_in_manuals ? "Мануалы" : "", ...(a.program_ids || []).map((id) => (programsCache || []).find((p) => p.id === id)?.title)]
+    .filter(Boolean).map((x) => App.badge(x, "gray")).join(" ") || `<span class="muted">скрыто</span>`;
+
   P["a-offers"] = crudPage("offers", {
-    title: "Офферы", ic: "handshake", sub: "Каталог офферов. Ставка пользователя = базовая выплата × % его тарифа.",
+    title: "Офферы", icon: "handshake", sub: "Каталог офферов. Ставка пользователя = базовая выплата × % его тарифа.", reorder: true,
     columns: [["Партнёр", (o) => esc(o.partner)], ["Название", (o) => `<b>${esc(o.name)}</b>`], ["Тип", (o) => esc(o.type)],
       ["Выплата", (o) => `<span class="mono">${money(o.payout)}</span>`], ["Лимит", (o) => o.limit_default || "—"],
-      ["Опубликован", (o) => yesNo(o.is_active)], ["Порядок", (o) => o.sort]],
+      ["Опубликован", (o) => yesNo(o.is_active)]],
   });
   P["a-articles"] = crudPage("articles", {
-    title: "Статьи", ic: "book", sub: "База знаний. Можно ограничить доступ минимальным тарифом.",
-    columns: [["Заголовок", (a) => `<b>${esc(a.title)}</b>`], ["Категория", (a) => esc(a.category)],
-      ["Доступ", (a) => a.min_tariff_id ? esc((tariffsCache || []).find((t) => t.id === a.min_tariff_id)?.name || "—") : "все"],
-      ["Опубликована", (a) => yesNo(a.is_published)], ["Создана", (a) => fmtDate(a.created_at)]],
+    title: "Статьи", icon: "book", sub: "Общая база статей. Галочками выбирается, где статья видна: в «Мануалах» и/или в программах обучения.",
+    reorder: true, cover: { kind: "articles", source: "url", label: "внешней ссылки (Teletype, сайт и т.п.)" },
+    columns: [["", thumb], ["Заголовок", (a) => `<b>${esc(a.title)}</b><div class="hint">${esc(a.category)}</div>`],
+      ["Где видна", placeCol], ["Опубликована", (a) => yesNo(a.is_published)], ["Создана", (a) => fmtDate(a.created_at)]],
   });
   P["a-news"] = crudPage("news", {
-    title: "Новости", ic: "news", sub: "Уведомления на главной странице кабинета.",
+    title: "Новости", icon: "news", sub: "Уведомления на главной странице кабинета.",
     columns: [["Заголовок", (n) => `<b>${esc(n.title)}</b>`], ["Текст", (n) => `<span class="clip1">${esc(n.body)}</span>`], ["Дата", (n) => fmtDateTime(n.created_at)]],
     extra: (item) => item ? "" : `<label class="row gap8 mb"><span class="switch"><input type="checkbox" name="broadcast"><span></span></span>Разослать в Telegram (если бот настроен)</label>`,
-    beforeSave: (data, form) => ({ ...data, broadcast: form.elements.broadcast?.checked || false }),
+    beforeSave: (form) => ({ broadcast: form.elements.broadcast?.checked || false }),
   });
   P["a-team"] = crudPage("team", {
-    title: "Команда", ic: "users", sub: "Блок «Команда и каналы» на главной.",
-    columns: [["Имя", (t) => `<b>${esc(t.name)}</b>`], ["Роль", (t) => esc(t.role)], ["Ссылки", (t) => esc(t.links).replace(/\n/g, ", ")], ["Порядок", (t) => t.sort]],
+    title: "Команда", icon: "users", sub: "Блок «Команда и каналы» на главной.", reorder: true,
+    columns: [["Имя", (t) => `<b>${esc(t.name)}</b>`], ["Роль", (t) => esc(t.role)], ["Ссылки", (t) => esc(t.links).replace(/\n/g, ", ")]],
   });
+
+  // ---------- тарифы ----------
+  const inviteLink = (code) => `${location.origin}/join/${code}`;
   P["a-tariffs"] = crudPage("tariffs", {
-    title: "Тарифы", ic: "card", sub: "Уровень открывает статьи; ставка меняет выплату по офферам.",
-    columns: [["Название", (t) => `<b>${esc(t.name)}</b> <span class="hint">${esc(t.code)}</span>`], ["Цена", (t) => t.price ? `${money(t.price)} / ${t.period_days} дн.` : "бесплатно"],
-      ["Ставка", (t) => `${t.rate}%`], ["Уровень", (t) => t.level], ["По умолчанию", (t) => yesNo(t.is_default)], ["В продаже", (t) => yesNo(t.is_public)]],
+    title: "Тарифы", icon: "card", addLabel: "Новый тариф",
+    sub: "Галочками выбираются разделы, которые видит человек. Кнопка «Смотреть» покажет сайт глазами тарифа.",
+    deleteText: "Удалить тариф? Пользователи на нём останутся без тарифа.",
+    columns: [
+      ["Название", (t) => `<b>${esc(t.name)}</b> <span class="hint">${esc(t.code)}</span>${t.is_default ? " " + App.badge("по умолчанию", "gray") : ""}`],
+      ["Разделы", (t) => `<span class="small">${t.features.map((k) => esc(schemaCache.features.find((f) => f.key === k)?.label.split(" (")[0] || k)).join(", ") || "—"}</span>`],
+      ["Программа", (t) => esc((programsCache || []).find((p) => p.id === t.program_id)?.title || "—")],
+      ["Цена", (t) => t.price ? `${money(t.price)} / ${t.period_days} дн.` : "бесплатно"],
+      ["Приглашение", (t) => t.invite_enabled ? `<button class="btn sm" data-invite="${esc(t.invite_code)}">${icon("copy")}Ссылка</button>` : `<span class="muted">выкл.</span>`],
+      ["", (t) => `<button class="btn sm ghost" data-view="${t.id}">${icon("eye")}Смотреть</button>`],
+    ],
+    extra: (t) => t ? `<div class="notice">${icon("link")}<div class="minw0">Ссылка-приглашение: <span class="mono break">${esc(inviteLink(t.invite_code))}</span>
+      <div class="row mt8"><button type="button" class="btn sm" data-copyinv>${icon("copy")}Копировать</button><button type="button" class="btn sm ghost" data-regen>Сменить ссылку</button></div>
+      <span class="hint">После смены старая ссылка перестанет работать.</span></div></div>` : "",
+    onModal: (m, t) => {
+      if (!t) return;
+      $("[data-copyinv]", m).onclick = () => App.copy(inviteLink(t.invite_code));
+      $("[data-regen]", m).onclick = async () => {
+        if (!(await App.confirm("Сменить ссылку? Старая перестанет работать."))) return;
+        try { const r = await App.post(`/api/admin/tariffs/${t.id}/invite`); t.invite_code = r.invite_code; $(".mono", m).textContent = inviteLink(r.invite_code); App.toast("Новая ссылка готова"); }
+        catch (e) { App.fail(e); }
+      };
+    },
+    bind: (box, items) => {
+      $$("[data-invite]", box).forEach((b) => b.onclick = () => App.copy(inviteLink(b.dataset.invite)));
+      $$("[data-view]", box).forEach((b) => b.onclick = () => App.setViewTariff(items.find((t) => t.id === +b.dataset.view)));
+    },
   });
+
+  // ---------- обучение ----------
+  P["a-learning"] = {
+    admin: true, crumbs: ["Админка", "Обучение"],
+    async render(el) {
+      el.innerHTML = `${App.pageHead("trend", "Обучение", "Программы: роадмап, уроки и материалы. Программа показывается ученикам через тариф.")}
+        <div class="notice">${icon("help")}<div>Чтобы ученики увидели программу: <a class="link-btn" href="#/a-tariffs">Тарифы</a> → откройте тариф → включите «Обучение» и выберите программу.</div></div>
+        <div data-crud></div>`;
+    },
+    async mount(el) {
+      await crudBlock($("[data-crud]", el), "programs", {
+        icon: "trend", addLabel: "Новая программа", cover: { kind: "programs" },
+        deleteText: "Удалить программу вместе со всеми уроками, шагами и прогрессом учеников?",
+        rowHref: (p) => `#/a-program/${p.id}`,
+        columns: [["", thumb], ["Программа", (p) => `<b>${esc(p.title)}</b><div class="hint clip1">${esc(p.description)}</div>`],
+          ["Тарифы", (p) => (tariffsCache || []).filter((t) => t.program_id === p.id).map((t) => App.badge(t.name, "gray")).join(" ") || `<span class="muted">не привязана</span>`],
+          ["", (p) => `<a class="btn sm primary" href="#/a-program/${p.id}">Открыть${icon("chev")}</a>`]],
+      });
+    },
+  };
+
+  const TARGETS = [["", "Никуда"], ["lesson", "Урок"], ["article", "Статья"], ["material", "Файл / материал"], ["url", "Ссылка"]];
+  let programTab = "steps";
+  P["a-program"] = {
+    admin: true, crumbs: ["Админка", "Обучение", "Программа"],
+    async render(el, id) {
+      const p = (await loadPrograms(true)).find((x) => x.id === +id);
+      if (!p) throw new Error("Программа не найдена");
+      el._p = p;
+      el.innerHTML = `<a class="link-btn" href="#/a-learning">${icon("back")} Все программы</a>
+        <div class="row mt mb"><h1 class="m0 flex1">${esc(p.title)}</h1>
+          <button class="btn sm" id="preview-prog">${icon("eye")}Как видит ученик</button></div>
+        <div class="tabs">${[["steps", "Роадмап"], ["lessons", "Уроки"], ["mats", "Материалы"]].map(([k, l]) =>
+          `<button class="tab ${programTab === k ? "active" : ""}" data-tab="${k}">${l}</button>`).join("")}</div>
+        <div data-pane="steps" ${programTab === "steps" ? "" : "hidden"}></div>
+        <div data-pane="lessons" ${programTab === "lessons" ? "" : "hidden"}></div>
+        <div data-pane="mats" ${programTab === "mats" ? "" : "hidden"}></div>`;
+    },
+    async mount(el) {
+      const p = el._p;
+      const loaders = {
+        steps: () => stepsEditor($('[data-pane="steps"]', el), p.id),
+        lessons: () => crudBlock($('[data-pane="lessons"]', el), "lessons", {
+          icon: "play", addLabel: "Новый урок", reorder: true, hidden: ["program_id"], defaults: { program_id: p.id },
+          filter: (l) => l.program_id === p.id, cover: { kind: "lessons", source: "video_url", label: "видео (YouTube, RuTube и др.)" },
+          columns: [["", thumb], ["№", (l) => `<span data-num="${l.id}"></span>`], ["Урок", (l) => `<b>${esc(l.title)}</b><div class="hint clip1">${esc(l.video_url || "без видео")}</div>`],
+            ["Длительность", (l) => esc(l.duration || "—")], ["Опубликован", (l) => yesNo(l.is_published)]],
+          bind: (box, items) => items.forEach((l, i) => { const c = $(`[data-num="${l.id}"]`, box); if (c) c.textContent = i + 1; }),
+        }),
+        mats: () => materialsPicker($('[data-pane="mats"]', el), p.id),
+      };
+      // Вкладки перезагружаются при каждом открытии — новый урок сразу виден в шагах и т.п.
+      const show = (k) => { programTab = k; loaders[k]().catch(App.fail); };
+      App.tabs(el, show);
+      show(programTab);
+      $("#preview-prog", el).onclick = async () => {
+        const t = (await loadTariffs(true)).find((x) => x.program_id === p.id);
+        App.setViewTariff(t || { id: 0, name: p.title, features: ["learning", "support"], program_id: p.id });
+      };
+    },
+  };
+
+  async function stepsEditor(box, pid) {
+    const [steps, lessonsAll, arts, mats] = await Promise.all([App.get(`/api/admin/programs/${pid}/steps`), App.get("/api/admin/r/lessons"),
+      App.get("/api/admin/r/articles"), App.get("/api/admin/materials")]);
+    const lessons = lessonsAll.filter((l) => l.program_id === pid);
+    const options = { lesson: lessons.map((l, i) => [l.id, `Урок ${i + 1}. ${l.title}`]), article: arts.map((a) => [a.id, a.title]), material: mats.map((m) => [m.id, m.title]) };
+    const targetText = (s) => {
+      if (s.target_type === "url") return s.target_url;
+      const opt = (options[s.target_type] || []).find(([id]) => id === s.target_id);
+      return opt ? opt[1] : "";
+    };
+    const reload = () => stepsEditor(box, pid);
+    box.innerHTML = `<p class="hint">Точки на линии роадмапа. Внутри шага — задачи-галочки. Шаг без задач отмечается целиком, а если он ведёт на урок — сам, когда урок пройден.</p>
+      <div class="step-list">${steps.map((s, i) => `
+        <div class="step-row"><span class="step-num">${i + 1}</span>
+          <div class="flex1 minw0"><b>${esc(s.title)}</b>
+            <div class="hint">${s.target_type ? `→ ${esc(TARGETS.find(([k]) => k === s.target_type)[1])}: ${esc(targetText(s))}` : "без ссылки"} · задач: ${s.tasks.length}</div></div>
+          <button class="btn sm ghost" data-up="${i}" ${i ? "" : "disabled"}>${icon("up")}</button><button class="btn sm ghost" data-down="${i}" ${i < steps.length - 1 ? "" : "disabled"}>${icon("down")}</button>
+          <button class="btn sm ghost" data-edit="${s.id}">${icon("edit")}</button><button class="btn sm ghost" data-del="${s.id}">${icon("trash")}</button></div>`).join("")
+        || `<div class="card soft">${App.empty("target", "Шагов пока нет")}</div>`}</div>
+      <button class="btn primary mt" data-add>${icon("plus")}Добавить шаг</button>`;
+    const move = async (i, d) => { const ids = steps.map((x) => x.id); [ids[i], ids[i + d]] = [ids[i + d], ids[i]]; await App.post("/api/admin/reorder/steps", { ids }).catch(App.fail); reload(); };
+    $$("[data-up]", box).forEach((b) => b.onclick = () => move(+b.dataset.up, -1));
+    $$("[data-down]", box).forEach((b) => b.onclick = () => move(+b.dataset.down, 1));
+    $$("[data-del]", box).forEach((b) => b.onclick = async () => {
+      if (await App.confirm("Удалить шаг вместе с задачами и отметками учеников?", "Удалить")) { await App.del(`/api/admin/steps/${b.dataset.del}`).catch(App.fail); reload(); }
+    });
+    $$("[data-edit]", box).forEach((b) => b.onclick = () => open(steps.find((s) => s.id === +b.dataset.edit)));
+    $("[data-add]", box).onclick = () => open(null);
+
+    function open(st) {
+      const taskRow = (t) => `<div class="task-edit" data-tid="${t?.id || ""}"><input class="input" value="${esc(t?.text || "")}" placeholder="Что нужно сделать">
+        <button type="button" class="btn sm ghost" data-rm>${icon("x")}</button></div>`;
+      App.modal(st ? "Шаг роадмапа" : "Новый шаг", `<form id="sf">
+        <div class="field"><label>Название шага *</label><input class="input" name="title" value="${esc(st?.title || "")}" required placeholder="Например: Первая работа по ссылкам"></div>
+        <div class="field"><label>Пояснение</label><textarea class="input" name="description" rows="3">${esc(st?.description || "")}</textarea></div>
+        <div class="grid g2"><div class="field"><label>Кнопка шага ведёт</label><select class="input" name="target_type">${TARGETS.map(([k, l]) => `<option value="${k}" ${st?.target_type === k ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+          <div class="field" data-target></div></div>
+        <div class="field"><label>Задачи (галочки для ученика)</label><div data-tasks>${(st?.tasks || []).map(taskRow).join("")}</div>
+          <button type="button" class="btn sm mt8" data-addtask>${icon("plus")}Задача</button></div>
+        <div class="form-error"></div>
+        <div class="row"><button class="btn primary" type="submit">Сохранить</button><button type="button" class="btn" data-close>Отмена</button></div></form>`,
+      (m, close) => {
+        const form = $("#sf", m), tbox = $("[data-tasks]", m);
+        const drawTarget = () => {
+          const t = form.target_type.value, box2 = $("[data-target]", m);
+          if (t === "url") box2.innerHTML = `<label>Ссылка</label><input class="input" name="target_url" type="url" placeholder="https://" value="${esc(st?.target_url || "")}">`;
+          else if (options[t]) box2.innerHTML = `<label>${t === "lesson" ? "Урок" : t === "article" ? "Статья" : "Материал"}</label>
+            <select class="input" name="target_id">${options[t].map(([id, l]) => `<option value="${id}" ${st?.target_id === id ? "selected" : ""}>${esc(l)}</option>`).join("") || "<option value=''>— пусто —</option>"}</select>`;
+          else box2.innerHTML = "";
+        };
+        const bindRm = () => $$("[data-rm]", tbox).forEach((b) => b.onclick = () => b.closest(".task-edit").remove());
+        form.target_type.onchange = drawTarget; drawTarget(); bindRm();
+        $("[data-addtask]", m).onclick = () => { tbox.insertAdjacentHTML("beforeend", taskRow(null)); bindRm(); $(".task-edit:last-child input", tbox).focus(); };
+        App.onSubmit(form, async (d) => {
+          d.tasks = $$(".task-edit", tbox).map((r) => ({ id: r.dataset.tid ? +r.dataset.tid : null, text: $("input", r).value }));
+          if (st) await App.put(`/api/admin/steps/${st.id}`, d); else await App.post(`/api/admin/programs/${pid}/steps`, d);
+          close(); App.toast("Сохранено"); reload();
+        });
+      }, { wide: true });
+    }
+  }
+
+  async function materialsPicker(box, pid) {
+    const [arts, mats] = await Promise.all([App.get("/api/admin/r/articles"), App.get("/api/admin/materials")]);
+    const row = (x, kind) => `<label class="pick-row">${thumb(x)}<div class="flex1 minw0"><b>${esc(x.title)}</b><div class="hint">${kind === "a" ? "статья" : "файл"}${x.show_in_manuals ? " · также в «Мануалах»" : ""}</div></div>
+      <span class="switch"><input type="checkbox" data-${kind}="${x.id}" ${x.program_ids.includes(pid) ? "checked" : ""}><span></span></span></label>`;
+    box.innerHTML = `<p class="hint">Отметьте статьи и файлы, которые ученики увидят в разделе «Материалы» этой программы.</p>
+      <div class="row mb"><a class="btn sm" href="#/a-articles">${icon("plus")}Новая статья</a><a class="btn sm" href="#/a-materials">${icon("plus")}Новый файл</a></div>
+      <div class="card"><div class="card-title">${icon("book")}Статьи</div>${arts.map((a) => row(a, "a")).join("") || App.empty("book", "Статей нет")}</div>
+      <div class="card"><div class="card-title">${icon("folder")}Файлы</div>${mats.map((m) => row(m, "m")).join("") || App.empty("folder", "Файлов нет")}</div>`;
+    const ids = (list, on, id) => { const s = new Set(list); on ? s.add(id) : s.delete(id); return [...s]; };
+    $$("[data-a]", box).forEach((c) => c.onchange = async () => {
+      const a = arts.find((x) => x.id === +c.dataset.a);
+      try { a.program_ids = ids(a.program_ids, c.checked, pid); await App.put(`/api/admin/r/articles/${a.id}`, { program_ids: a.program_ids }); App.toast("Сохранено"); }
+      catch (e) { App.fail(e); c.checked = !c.checked; }
+    });
+    $$("[data-m]", box).forEach((c) => c.onchange = async () => {
+      const m = mats.find((x) => x.id === +c.dataset.m);
+      const fd = new FormData();
+      m.program_ids = ids(m.program_ids, c.checked, pid);
+      m.program_ids.forEach((id) => fd.append("program_ids", id));
+      if (!m.program_ids.length) fd.append("program_ids", "");
+      try { await App.api("POST", `/api/admin/materials/${m.id}`, undefined, { form: fd }); App.toast("Сохранено"); }
+      catch (e) { App.fail(e); c.checked = !c.checked; }
+    });
+  }
 
   // ---------- обзор ----------
   P.admin = {
@@ -506,13 +759,13 @@
   P["a-materials"] = {
     admin: true, crumbs: ["Админка", "Материалы"],
     async render(el) {
-      const items = await App.get("/api/admin/materials");
+      const [items] = await Promise.all([App.get("/api/admin/materials"), loadPrograms()]);
       el._data = items;
-      el.innerHTML = `${App.pageHead("folder", "Материалы", "Файлы и ссылки на вкладке «Материалы» в базе знаний (файл до 25 МБ)")}
+      el.innerHTML = `${App.pageHead("folder", "Файлы и материалы", "Файлы (до 25 МБ) и ссылки. Галочками выбирается, где показывать: в «Мануалах» и/или в программах обучения.")}
         <button class="btn primary mb" id="madd">${icon("plus")}Добавить</button>
-        ${items.length ? `<div class="table-wrap"><table><tr><th>Название</th><th>Файл / ссылка</th><th>Размер</th><th>Порядок</th><th></th></tr>
-          ${items.map((m) => `<tr class="clickable" data-id="${m.id}"><td><b>${esc(m.title)}</b><div class="hint">${esc(m.description)}</div></td>
-            <td>${m.filename ? esc(m.filename) : `<span class="mono">${esc(m.url)}</span>`}</td><td>${m.size ? (m.size / 1024).toFixed(1) + " КБ" : "—"}</td><td>${m.sort}</td>
+        ${items.length ? `<div class="table-wrap"><table><tr><th></th><th>Название</th><th>Файл / ссылка</th><th>Где виден</th><th></th></tr>
+          ${items.map((m) => `<tr class="clickable" data-id="${m.id}"><td>${thumb(m)}</td><td><b>${esc(m.title)}</b><div class="hint">${esc(m.description)}</div></td>
+            <td>${m.filename ? `${esc(m.filename)} <span class="hint">${(m.size / 1024).toFixed(1)} КБ</span>` : `<span class="mono clip1">${esc(m.url)}</span>`}</td><td>${placeCol(m)}</td>
             <td><button class="btn sm ghost" data-del="${m.id}">${icon("trash")}</button></td></tr>`).join("")}</table></div>`
           : `<div class="card soft">${App.empty("folder", "Материалов пока нет")}</div>`}`;
     },
@@ -522,18 +775,31 @@
         <div class="field"><label>Название *</label><input class="input" name="title" value="${esc(m?.title || "")}" required></div>
         <div class="field"><label>Описание</label><input class="input" name="description" value="${esc(m?.description || "")}"></div>
         <div class="field"><label>Файл ${m?.filename ? `(сейчас: ${esc(m.filename)})` : ""}</label><input type="file" name="file"></div>
-        ${m?.filename ? `<label class="row gap8 mb"><input type="checkbox" name="remove_file" value="1"> Удалить файл</label>` : ""}
+        ${m?.filename ? `<label class="row gap8 mb small"><input type="checkbox" name="remove_file" value="1"> Удалить файл</label>` : ""}
         <div class="field"><label>…или внешняя ссылка</label><input class="input" name="url" type="url" placeholder="https://" value="${esc(m?.url || "")}"></div>
-        <div class="field"><label>Порядок</label><input class="input" name="sort" type="number" value="${m?.sort || 0}"></div>
+        <label class="row gap8 mb"><span class="switch"><input type="checkbox" name="show_in_manuals" ${!m || m.show_in_manuals ? "checked" : ""}><span></span></span>Показывать в «Мануалах»</label>
+        ${(programsCache || []).length ? `<div class="field"><label>Показывать в программах обучения</label>${checks("program_ids", programsCache.map((p) => [String(p.id), p.title]), (m?.program_ids || []).map(String))}</div>` : ""}
+        ${coverFields(m, "ссылки")}
         <div class="form-error"></div><div class="row"><button class="btn primary" type="submit">Сохранить</button><button type="button" class="btn" data-close>Отмена</button></div></form>`,
-        (md, close) => App.onSubmit($("#mf", md), async (_, f) => {
-          const fd = new FormData(f);
-          if (!f.file.files[0]) fd.delete("file");
-          await App.api("POST", m ? `/api/admin/materials/${m.id}` : "/api/admin/materials", undefined, { form: fd });
-          close(); App.toast("Сохранено"); App.rerender();
-        }));
+        (md, close) => {
+          const f = $("#mf", md);
+          bindCoverPreview(f);
+          App.onSubmit(f, async () => {
+            const fd = new FormData();
+            ["title", "description", "url"].forEach((k) => fd.append(k, f.elements[k].value));
+            if (f.file.files[0]) fd.append("file", f.file.files[0]);
+            if (f.remove_file?.checked) fd.append("remove_file", "1");
+            fd.append("show_in_manuals", f.show_in_manuals.checked ? "1" : "0");
+            const progs = $$('input[name="program_ids"]:checked', f).map((i) => i.value);
+            progs.forEach((id) => fd.append("program_ids", id));
+            if (!progs.length) fd.append("program_ids", "");
+            const saved = await App.api("POST", m ? `/api/admin/materials/${m.id}` : "/api/admin/materials", undefined, { form: fd });
+            await applyCover("materials", saved.id, f, f.elements.url.value);
+            close(); App.toast("Сохранено"); App.rerender();
+          });
+        }, { wide: true });
       $("#madd", el).onclick = () => open(null);
-      $$("tr.clickable", el).forEach((tr) => tr.onclick = (e) => { if (!e.target.closest("[data-del]")) open(items.find((x) => x.id === +tr.dataset.id)); });
+      $$("tr.clickable", el).forEach((tr) => tr.onclick = (e) => { if (!e.target.closest("button")) open(items.find((x) => x.id === +tr.dataset.id)); });
       $$("[data-del]", el).forEach((b) => b.onclick = async () => {
         if (await App.confirm("Удалить материал?", "Удалить")) { await App.del(`/api/admin/materials/${b.dataset.del}`).catch(App.fail); App.rerender(); }
       });

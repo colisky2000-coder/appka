@@ -363,3 +363,122 @@ tr.clickable:hover td { background: var(--bg-soft); }
 .auth-card { width: 100%; max-width: 400px; padding: 28px; }
 .auth-card h2 { text-align: center; font-size: 20px; margin: 4px 0 20px; }
 .auth-card .brand { padding-bottom: 8px; }
+
+/* ---------- Превью / карточки с картинкой ---------- */
+.cover { position: relative; aspect-ratio: 16 / 9; background: var(--bg-soft); overflow: hidden; }
+.cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover.ph { display: grid; place-items: center; background: linear-gradient(135deg, #f6eedd, #efe3c8); }
+.cover.ph span { font-size: 34px; font-weight: 700; color: #c8a15a; }
+.media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+.span-all { grid-column: 1 / -1; }
+.card-media { display: flex; flex-direction: column; text-align: left; width: 100%; border: 1px solid var(--line-strong); border-radius: 14px; overflow: hidden; background: var(--bg); transition: border-color .15s, transform .15s; }
+.card-media:hover { border-color: var(--accent); transform: translateY(-1px); }
+.cm-body { padding: 12px 14px 14px; position: relative; display: flex; flex-direction: column; gap: 4px; flex: 1; }
+.cm-body h3 { margin: 2px 0 0; font-size: 15px; font-weight: 600; line-height: 1.3; }
+.cm-body p { margin: 0; font-size: 12.5px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cm-body time { margin-top: auto; padding-top: 6px; font-size: 11.5px; color: var(--muted); display: flex; gap: 5px; align-items: center; }
+.cm-body time svg { width: 12px; height: 12px; }
+.cm-badge { position: absolute; top: -16px; right: 12px; width: 30px; height: 30px; border-radius: 50%; background: var(--bg); box-shadow: 0 2px 8px rgba(0,0,0,.15); display: grid; place-items: center; color: #d69a2d; }
+.wide-cover { border-radius: 12px; margin-bottom: 12px; }
+.thumb-sm { width: 64px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); }
+.thumb-sm .cover.ph span { font-size: 16px; }
+.cover-thumb { width: 160px; flex: none; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+.cover-edit input[type=file] { font-size: 12.5px; max-width: 100%; }
+
+/* ---------- Уроки ---------- */
+.cover-wrap { position: relative; }
+.play-badge { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; }
+.play-badge svg { width: 46px; height: 46px; fill: rgba(0,0,0,.45); stroke: #fff; }
+.lesson-card.done { opacity: .78; }
+.lesson-card.next { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.lesson-head { margin: 14px 0 14px; }
+.lesson-head h1 { margin: 4px 0 0; font-size: 26px; }
+.video { position: relative; aspect-ratio: 16 / 9; border-radius: 14px; overflow: hidden; background: #111; margin-bottom: 16px; }
+.video .cover { position: absolute; inset: 0; aspect-ratio: auto; height: 100%; }
+.video iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.play-btn { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 76px; height: 76px; border-radius: 50%; background: rgba(0,0,0,.55); display: grid; place-items: center; color: #fff; transition: transform .15s, background .15s; }
+.play-btn:hover { transform: translate(-50%, -50%) scale(1.07); background: var(--accent); }
+.play-btn svg { width: 44px; height: 44px; fill: #fff; stroke: none; }
+.play-btn svg circle { display: none; }
+.lesson-nav { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin: 8px 0 30px; }
+.prose { line-height: 1.6; }
+.prose h3 { font-size: 18px; margin: 16px 0 6px; }
+.prose h4 { font-size: 15px; margin: 14px 0 4px; }
+.prose p { margin: 0 0 10px; }
+.prose ul { margin: 0 0 10px; padding-left: 20px; }
+.prose > :first-child { margin-top: 0; }
+
+/* ---------- Роадмап ---------- */
+.learn-hero { display: flex; gap: 20px; align-items: center; flex-wrap: wrap; border: 1px solid var(--accent-line); background: linear-gradient(135deg, #fffdf8, var(--accent-soft)); border-radius: 16px; padding: 20px 22px; margin-bottom: 16px; }
+.learn-hero h1 { margin: 4px 0 6px; font-size: 26px; }
+.hero-cta { flex: none; max-width: 100%; }
+.btn.lg { padding: 12px 18px; font-size: 14.5px; border-radius: 10px; }
+.progress.lg { height: 8px; border-radius: 6px; margin: 12px 0 6px; }
+.done-banner { display: flex; gap: 10px; align-items: center; color: var(--ok); font-weight: 500; max-width: 320px; }
+.done-banner svg { width: 28px; height: 28px; flex: none; }
+.roadmap-card { padding: 8px 0; }
+.roadmap { overflow-x: auto; padding: 16px 10px 8px; scroll-behavior: smooth; }
+.rm-track { display: flex; min-width: max-content; }
+.rm-point { position: relative; width: 132px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 0 6px 6px; text-align: center; }
+.rm-point::before { content: ""; position: absolute; top: 17px; right: 50%; width: 100%; height: 3px; background: var(--line); z-index: 0; }
+.rm-point:first-child::before { display: none; }
+.rm-point.done::before, .rm-point.current::before { background: var(--accent); }
+.rm-point .dot { position: relative; z-index: 1; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 2px solid var(--line); color: var(--muted); font-weight: 600; font-size: 13px; transition: transform .15s; }
+.rm-point .dot svg { width: 18px; height: 18px; }
+.rm-point.done .dot { background: var(--accent); border-color: var(--accent); color: #fff; }
+.rm-point.current .dot { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); animation: pulse 2s infinite; }
+.rm-point.sel .dot { transform: scale(1.15); }
+.rm-point.sel .rm-label { color: var(--text); font-weight: 600; }
+.rm-point:hover .dot { transform: scale(1.1); }
+.rm-label { font-size: 12.5px; color: var(--muted); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft); } 50% { box-shadow: 0 0 0 8px var(--accent-soft); } }
+.step-panel h2 { margin: 10px 0 6px; font-size: 20px; }
+.step-panel .btn.accent-o { margin: 4px 0 6px; }
+.step-nav { margin-top: 14px; border-top: 1px solid var(--line); padding-top: 12px; }
+
+/* ---------- Задачи-галочки ---------- */
+.tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.task { display: flex; gap: 12px; align-items: center; padding: 11px 14px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; transition: background .15s, border-color .15s; }
+.task:hover { border-color: var(--accent-line); background: #fffdf8; }
+.task input { position: absolute; opacity: 0; pointer-events: none; }
+.task .box { width: 22px; height: 22px; flex: none; border-radius: 6px; border: 2px solid var(--line-strong); display: grid; place-items: center; color: transparent; transition: .15s; }
+.task .box svg { width: 14px; height: 14px; stroke-width: 3; }
+.task.done { background: #f6fbf8; border-color: #cdebdc; }
+.task.done .box { background: var(--ok); border-color: var(--ok); color: #fff; }
+.task.done .tt { color: var(--muted); text-decoration: line-through; }
+.task input:focus-visible + .box { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* ---------- Режим «глазами тарифа» ---------- */
+.preview-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 24px; background: #1c1c1c; color: #fff; font-size: 13px; position: sticky; top: 48px; z-index: 9; }
+.preview-bar .btn { color: var(--text); margin-left: auto; }
+.preview-bar[hidden] { display: none; }
+
+/* ---------- Админка: обучение ---------- */
+.checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 14px; }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: 13px; cursor: pointer; }
+.check input { margin-top: 2px; accent-color: var(--accent); }
+.step-list { display: flex; flex-direction: column; gap: 8px; }
+.step-row { display: flex; gap: 8px; align-items: center; border: 1px solid var(--line-strong); border-radius: 12px; padding: 10px 12px; }
+.step-num { width: 28px; height: 28px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); display: grid; place-items: center; font-weight: 600; flex: none; }
+.task-edit { display: flex; gap: 6px; margin-bottom: 6px; }
+.pick-row { display: flex; gap: 12px; align-items: center; padding: 8px 0; border-top: 1px solid var(--line); cursor: pointer; }
+.pick-row:first-of-type { border-top: 0; }
+td.move .btn { padding: 4px 6px; }
+.break { word-break: break-all; }
+svg.big { width: 40px; height: 40px; }
+.sticky-actions { position: sticky; bottom: -22px; background: var(--bg); padding: 10px 0; }
+
+@media (max-width: 560px) {
+  .learn-hero { padding: 16px; }
+  .learn-hero h1, .lesson-head h1 { font-size: 21px; }
+  .hero-cta, .hero-cta .btn { width: 100%; justify-content: center; }
+  /* На телефоне роадмап вертикальный */
+  .roadmap { overflow-x: visible; padding: 8px 12px; }
+  .rm-track { flex-direction: column; min-width: 0; }
+  .rm-point { width: auto; flex-direction: row; text-align: left; gap: 12px; padding: 6px 0; }
+  .rm-point::before { top: auto; bottom: 50%; right: auto; left: 17px; width: 3px; height: 100%; }
+  .rm-label { font-size: 13.5px; -webkit-line-clamp: 2; }
+  .cover-thumb { width: 110px; }
+  .preview-bar { padding: 8px 16px; }
+  .media-grid { grid-template-columns: 1fr; }
+}

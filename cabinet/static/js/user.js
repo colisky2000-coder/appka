@@ -1,11 +1,12 @@
 /* Страницы личного кабинета пользователя. */
 (() => {
-  const { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, ago, nl2br, linkify, qs, icon, initial } = App;
+  const { $, $$, esc, money, fmtDate, fmtDateTime, isoDay, ago, nl2br, linkify, qs, icon, initial, md, cover } = App;
   const P = App.pages;
   const S = () => App.cfg.settings;
 
   // ================= Дашборд =================
   P.dashboard = {
+    feature: "dashboard",
     crumbs: [],
     async render(el) {
       const [d, news] = await Promise.all([App.get("/api/dashboard"), App.get("/api/news")]);
@@ -76,27 +77,47 @@
   };
 
   // ================= База знаний =================
+  // Открыть статью: внешняя ссылка — в новой вкладке, текст — в окне
+  App.openArticle = async (id) => {
+    try {
+      const a = await App.get(`/api/articles/${id}` + (App.programParam() ? "?" + App.programParam() : ""));
+      if (a.url && !a.body) return window.open(a.url, "_blank", "noopener");
+      App.modal(a.title, `${a.cover ? cover(a.cover, a.title, "wide-cover") : ""}
+        <p class="muted">${esc(a.category)}${a.category ? " · " : ""}${fmtDate(a.created_at)}</p>
+        <div class="prose">${md(a.body)}</div>
+        ${a.url ? `<a class="btn mt" href="${esc(a.url)}" target="_blank" rel="noopener">${icon("ext")}Открыть источник</a>` : ""}`, null, { wide: true });
+    } catch (e) { App.fail(e); }
+  };
+  // Карточка статьи или файла с превью
+  App.contentCard = (x) => {
+    const isFile = x.kind === "material";
+    const href = isFile ? (x.download || x.url) : "";
+    const tag = isFile ? `a href="${esc(href)}" ${x.download ? "" : 'target="_blank" rel="noopener"'}` : `button data-article="${x.id}"`;
+    const badge = isFile ? (x.download ? icon("download") : icon("ext")) : (x.url ? icon("ext") : "");
+    return `<${tag} class="card-media">${cover(x.cover, x.title)}
+      <div class="cm-body">${badge ? `<span class="cm-badge">${badge}</span>` : ""}
+        <h3>${esc(x.title)}</h3><p>${esc(x.description || (isFile ? x.filename : "") || "")}</p>
+        <time>${icon("clock")}${ago(x.created_at)}</time></div></${isFile ? "a" : "button"}>`;
+  };
+  App.bindContentCards = (root) => $$("[data-article]", root).forEach((b) => b.onclick = () => App.openArticle(+b.dataset.article));
+
   P.manuals = {
+    feature: "manuals",
     crumbs: ["База знаний"],
     async render(el) {
       const [arts, mats] = await Promise.all([App.get("/api/articles"), App.get("/api/materials")]);
       const cats = [...new Set(arts.map((a) => a.category).filter(Boolean))];
       el._data = arts;
       el.innerHTML = `${App.pageHead("book", "База знаний", "Статьи, руководства и рабочие файлы")}
-        <div class="tabs"><button class="tab active" data-tab="a">${icon("book")}Статьи</button><button class="tab" data-tab="m">${icon("folder")}Материалы</button></div>
+        <div class="tabs"><button class="tab active" data-tab="a">${icon("book")}Статьи</button><button class="tab" data-tab="m">${icon("folder")}Файлы</button></div>
         <div data-pane="a">
           <div class="input-icon w280 mb">${icon("search")}<input class="input" id="q" placeholder="Поиск статей..."></div>
-          ${cats.length ? `<div class="card"><div class="hint caps mb">Категории</div>
-            <div class="chips" id="cats"><button class="chip active" data-c="">Все<sup>${arts.length}</sup></button>
-            ${cats.map((c) => `<button class="chip" data-c="${esc(c)}">${esc(c)}<sup>${arts.filter((a) => a.category === c).length}</sup></button>`).join("")}</div></div>` : ""}
-          <div class="grid g2" id="arts"></div>
+          ${cats.length ? `<div class="chips mb" id="cats"><button class="chip active" data-c="">Все<sup>${arts.length}</sup></button>
+            ${cats.map((c) => `<button class="chip" data-c="${esc(c)}">${esc(c)}<sup>${arts.filter((a) => a.category === c).length}</sup></button>`).join("")}</div>` : ""}
+          <div class="media-grid" id="arts"></div>
         </div>
         <div data-pane="m" hidden>
-          ${mats.length ? `<div class="grid g2">${mats.map((m) => {
-            const href = m.filename ? `/api/materials/${m.id}/download` : m.url;
-            return `<a class="art" href="${esc(href)}" ${m.filename ? "" : 'target="_blank" rel="noopener"'}><span class="ext">${icon(m.filename ? "download" : "ext")}</span>
-              <h3>${esc(m.title)}</h3><p>${esc(m.description || m.filename || "")}</p><time>${icon("clock")}${ago(m.created_at)}</time></a>`;
-          }).join("")}</div>` : `<div class="card soft">${App.empty("folder", "Материалов пока нет")}</div>`}
+          ${mats.length ? `<div class="media-grid">${mats.map(App.contentCard).join("")}</div>` : `<div class="card soft">${App.empty("folder", "Файлов пока нет")}</div>`}
         </div>`;
     },
     mount(el) {
@@ -104,23 +125,202 @@
       let cat = "", q = "";
       const draw = () => {
         const list = arts.filter((a) => (!cat || a.category === cat) && (a.title + " " + a.description).toLowerCase().includes(q));
-        $("#arts", el).innerHTML = list.length ? list.map((a) => `
-          <button class="art" data-id="${a.id}">${a.url ? `<span class="ext">${icon("ext")}</span>` : ""}
-            <h3>${esc(a.title)}</h3><p>${esc(a.description || "Без описания")}</p><time>${icon("clock")}${ago(a.created_at)}</time></button>`).join("")
-          : `<div class="card soft span2">${App.empty(arts.length ? "search" : "book", arts.length ? "Ничего не найдено" : "Статей пока нет")}</div>`;
-        $$("#arts .art", el).forEach((b) => b.onclick = async () => {
-          const a = arts.find((x) => x.id === +b.dataset.id);
-          if (a.url) return window.open(a.url, "_blank", "noopener");
-          try {
-            const full = await App.get(`/api/articles/${a.id}`);
-            App.modal(full.title, `<p class="muted">${esc(full.category)}${full.category ? " · " : ""}${fmtDate(full.created_at)}</p><div class="body-text">${linkify(full.body)}</div>`, null, { wide: true });
-          } catch (e) { App.fail(e); }
-        });
+        $("#arts", el).innerHTML = list.length ? list.map(App.contentCard).join("")
+          : `<div class="card soft span-all">${App.empty(arts.length ? "search" : "book", arts.length ? "Ничего не найдено" : "Статей пока нет")}</div>`;
+        App.bindContentCards($("#arts", el));
       };
       draw();
       $("#q", el).oninput = (e) => { q = e.target.value.toLowerCase().trim(); draw(); };
       $$("#cats .chip", el).forEach((c) => c.onclick = () => { cat = c.dataset.c; $$("#cats .chip", el).forEach((x) => x.classList.toggle("active", x === c)); draw(); });
       App.tabs(el);
+    },
+  };
+
+  // ================= Обучение =================
+  const withProgram = (url) => url + (App.programParam() ? (url.includes("?") ? "&" : "?") + App.programParam() : "");
+  const openTarget = (t) => {
+    if (!t) return;
+    if (t.type === "lesson") location.hash = `#/lesson/${t.id}`;
+    else if (t.type === "article") App.openArticle(t.id);
+    else window.open(t.url, t.type === "material" && t.url.startsWith("/api/") ? "_self" : "_blank", "noopener");
+  };
+  const targetLabel = (t) => !t ? "" : t.type === "lesson" ? `Открыть: ${t.title}` : t.type === "url" ? "Перейти по ссылке" : `Открыть: ${t.title}`;
+  const taskHtml = (attr, id, text, done) => `<label class="task ${done ? "done" : ""}">
+    <input type="checkbox" ${attr}="${id}" ${done ? "checked" : ""}><span class="box">${icon("check")}</span><span class="tt">${esc(text)}</span></label>`;
+  let selectedStep = null; // выбранная точка роадмапа
+
+  P.learn = {
+    feature: "learning",
+    crumbs: ["Обучение", "Роадмап"],
+    async render(el) { el._data = await App.get(withProgram("/api/learn")); },
+    mount(el) {
+      let d = el._data;
+      // При открытии роадмапа выделяем текущий шаг; дальше выбор держится между перерисовками
+      selectedStep = d.current_step_id || d.steps[d.steps.length - 1]?.id || null;
+      const reload = async () => { try { d = await App.get(withProgram("/api/learn")); draw(); } catch (e) { App.fail(e); } };
+      const draw = () => {
+        const pr = d.progress, pct = pr.steps_total ? Math.round((pr.steps_done / pr.steps_total) * 100) : 0;
+        const cur = d.steps.find((s) => s.id === d.current_step_id);
+        const allDone = pr.steps_total > 0 && !cur;
+        let cont = "";
+        if (cur) cont = `<button class="btn primary lg" id="continue">${icon("play")}Продолжить: ${esc(cur.target && cur.target.type === "lesson" ? cur.target.title : cur.title)}</button>`;
+        else if (!pr.steps_total && d.next_lesson_id) cont = `<a class="btn primary lg" href="#/lesson/${d.next_lesson_id}">${icon("play")}Начать обучение</a>`;
+        const idx = d.steps.findIndex((s) => s.id === selectedStep);
+        const st = d.steps[idx];
+        el.innerHTML = `
+          <div class="learn-hero">
+            <div class="flex1 minw0"><div class="hint caps">${esc(S().learn_title || "Обучение")}</div><h1>${esc(d.program.title)}</h1>
+              ${d.program.description ? `<p class="muted m0">${esc(d.program.description)}</p>` : ""}
+              <div class="progress lg mt"><div style="width:${pct}%"></div></div>
+              <div class="hint">Пройдено ${pr.steps_done} из ${pr.steps_total} шагов · уроков ${pr.lessons_done} из ${pr.lessons_total}</div></div>
+            <div class="hero-cta">${allDone ? `<div class="done-banner">${icon("trophy")}<span>${esc(S().learn_done_text)}</span></div>` : cont}</div>
+          </div>
+          ${d.steps.length ? `
+          <div class="card roadmap-card"><div class="roadmap" id="rm"><div class="rm-track">
+            ${d.steps.map((s, i) => `<button class="rm-point ${s.done ? "done" : ""} ${s.id === d.current_step_id ? "current" : ""} ${s.id === selectedStep ? "sel" : ""}" data-step="${s.id}">
+              <span class="dot">${s.done ? icon("check") : i + 1}</span><span class="rm-label">${esc(s.title)}</span></button>`).join("")}
+          </div></div></div>
+          ${st ? `<div class="card step-panel">
+            <div class="row">${App.badge(`Шаг ${idx + 1} из ${d.steps.length}`, "gray")}${st.done ? App.badge("Выполнен", "ok") : st.id === d.current_step_id ? App.badge("Сейчас") : ""}</div>
+            <h2>${esc(st.title)}</h2>
+            ${st.description ? `<div class="prose muted">${md(st.description)}</div>` : ""}
+            ${st.target ? `<button class="btn accent-o" id="open-target">${icon("arrow")}${esc(targetLabel(st.target))}</button>` : ""}
+            <div class="tasks">${st.tasks.length ? st.tasks.map((t) => taskHtml("data-task", t.id, t.text, t.done)).join("")
+              : st.target?.type === "lesson" ? `<p class="hint">Шаг отметится сам, когда вы нажмёте «Урок пройден» в уроке.</p>${taskHtml("data-stepdone", st.id, "Шаг выполнен", st.done)}`
+              : taskHtml("data-stepdone", st.id, "Шаг выполнен", st.done)}</div>
+            <div class="row step-nav">
+              <button class="btn sm ghost" id="prev-step" ${idx <= 0 ? "disabled" : ""}>${icon("back")}Назад</button><span class="spacer"></span>
+              <button class="btn sm" id="next-step" ${idx >= d.steps.length - 1 ? "disabled" : ""}>Следующий шаг${icon("chev")}</button></div>
+          </div>` : ""}`
+          : `<div class="card soft">${App.empty("target", "Роадмап пока пуст", "Шаги появятся, когда их добавят в программу.")}</div>`}`;
+        // прокрутить линию к выбранной точке
+        const selEl = $(".rm-point.sel", el);
+        if (selEl) { const rm = $("#rm", el); rm.scrollLeft = selEl.offsetLeft - rm.clientWidth / 2 + selEl.clientWidth / 2; }
+        $$("[data-step]", el).forEach((b) => b.onclick = () => { selectedStep = +b.dataset.step; draw(); });
+        $("#prev-step", el)?.addEventListener("click", () => { selectedStep = d.steps[idx - 1].id; draw(); });
+        $("#next-step", el)?.addEventListener("click", () => { selectedStep = d.steps[idx + 1].id; draw(); });
+        $("#open-target", el)?.addEventListener("click", () => openTarget(st.target));
+        $("#continue", el)?.addEventListener("click", () => {
+          if (cur.target) openTarget(cur.target); else { selectedStep = cur.id; draw(); $(".step-panel", el)?.scrollIntoView({ behavior: "smooth" }); }
+        });
+        const toggle = async (url, checked, wasDone) => {
+          try {
+            await App.post(url, { done: checked });
+            const before = st.done;
+            await reload();
+            const now = d.steps.find((x) => x.id === st.id);
+            if (!before && now?.done) {
+              App.toast("Шаг выполнен");
+              const next = d.steps.find((x) => !x.done);
+              if (next) setTimeout(() => { selectedStep = next.id; draw(); }, 700);
+            }
+          } catch (e) { App.fail(e); draw(); }
+        };
+        $$("[data-task]", el).forEach((c) => c.onchange = () => { c.closest(".task").classList.toggle("done", c.checked); toggle(`/api/tasks/${c.dataset.task}/done`, c.checked); });
+        $$("[data-stepdone]", el).forEach((c) => c.onchange = () => {
+          if (st.target?.type === "lesson") {
+            const lesson = d.lessons.find((l) => l.id === st.target.id);
+            return toggle(`/api/lessons/${st.target.id}/done`, c.checked, lesson?.done);
+          }
+          toggle(`/api/steps/${st.id}/done`, c.checked);
+        });
+      };
+      draw();
+    },
+  };
+
+  P.lessons = {
+    feature: "learning",
+    crumbs: ["Обучение", "Уроки"],
+    async render(el) {
+      const d = await App.get(withProgram("/api/learn"));
+      const pr = d.progress;
+      el.innerHTML = `${App.pageHead("play", "Уроки", `${d.program.title} · пройдено ${pr.lessons_done} из ${pr.lessons_total}`)}
+        ${d.lessons.length ? `<div class="media-grid">${d.lessons.map((l) => `
+          <a class="card-media lesson-card ${l.done ? "done" : ""} ${l.id === d.next_lesson_id ? "next" : ""}" href="#/lesson/${l.id}">
+            <div class="cover-wrap">${cover(l.cover, l.title)}${l.has_video ? `<span class="play-badge">${icon("play")}</span>` : ""}</div>
+            <div class="cm-body"><div class="row gap8">${App.badge(`Урок ${l.num}`, "gray")}${l.done ? App.badge("Пройден", "ok") : l.id === d.next_lesson_id ? App.badge("Следующий") : ""}
+              ${l.is_published ? "" : App.badge("черновик", "bad")}</div>
+              <h3>${esc(l.title)}</h3>${l.duration ? `<time>${icon("clock")}${esc(l.duration)}</time>` : ""}</div></a>`).join("")}</div>`
+          : `<div class="card soft">${App.empty("play", "Уроков пока нет")}</div>`}`;
+    },
+  };
+
+  P.lesson = {
+    feature: "learning",
+    crumbs: ["Обучение", "Урок"],
+    async render(el, id) {
+      const l = await App.get(withProgram(`/api/lessons/${+id}`));
+      el._data = l;
+      const video = l.embed
+        ? `<div class="video" id="video">${cover(l.cover, l.title, "video-cover")}<button class="play-btn" id="play" aria-label="Смотреть">${icon("play")}</button></div>`
+        : l.video_url ? `<div class="video">${cover(l.cover, l.title, "video-cover")}<a class="play-btn" href="${esc(l.video_url)}" target="_blank" rel="noopener" aria-label="Смотреть">${icon("play")}</a></div>
+            <p class="hint">Видео откроется на сайте площадки.</p>` : "";
+      el.innerHTML = `<a class="link-btn" href="#/lessons">${icon("back")} Все уроки</a>
+        <div class="lesson-head"><div class="hint">Урок ${l.num} из ${l.total}${l.duration ? " · " + esc(l.duration) : ""}</div>
+          <h1>${esc(l.title)}</h1></div>
+        ${video}
+        ${l.body ? `<div class="card prose">${md(l.body)}</div>` : ""}
+        ${l.todo.length ? `<div class="card"><div class="card-title">${icon("check")}Что сделать после урока</div>
+          <div class="tasks">${l.todo.map((t) => taskHtml("data-task", t.id, t.text, t.done)).join("")}</div></div>` : ""}
+        <div class="lesson-nav">
+          ${l.prev_id ? `<a class="btn ghost" href="#/lesson/${l.prev_id}">${icon("back")}Предыдущий</a>` : "<span></span>"}
+          <div class="row">${l.done ? `<button class="btn sm ghost" id="undone">Снять отметку</button>` : ""}
+            ${l.done ? (l.next_id ? `<a class="btn primary" href="#/lesson/${l.next_id}">Следующий урок${icon("arrow")}</a>` : `<a class="btn primary" href="#/learn">К роадмапу${icon("arrow")}</a>`)
+              : `<button class="btn primary" id="done">${icon("check")}Урок пройден${l.next_id ? " → дальше" : ""}</button>`}</div>
+        </div>`;
+    },
+    mount(el) {
+      const l = el._data;
+      $("#play", el)?.addEventListener("click", () => {
+        $("#video", el).innerHTML = `<iframe src="${esc(l.embed)}" allow="autoplay; fullscreen; picture-in-picture; encrypted-media; clipboard-write" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe>`;
+      });
+      $$("[data-task]", el).forEach((c) => c.onchange = async () => {
+        c.closest(".task").classList.toggle("done", c.checked);
+        try { await App.post(`/api/tasks/${c.dataset.task}/done`, { done: c.checked }); } catch (e) { App.fail(e); c.checked = !c.checked; }
+      });
+      $("#done", el)?.addEventListener("click", async () => {
+        try {
+          await App.post(`/api/lessons/${l.id}/done`, { done: true });
+          App.toast("Урок пройден");
+          location.hash = l.next_id ? `#/lesson/${l.next_id}` : "#/learn";
+        } catch (e) { App.fail(e); }
+      });
+      $("#undone", el)?.addEventListener("click", async () => { await App.post(`/api/lessons/${l.id}/done`, { done: false }).catch(App.fail); App.rerender(); });
+    },
+  };
+
+  P["learn-materials"] = {
+    feature: "learning",
+    crumbs: ["Обучение", "Материалы"],
+    async render(el) {
+      const items = await App.get(withProgram("/api/learn/materials"));
+      el.innerHTML = `${App.pageHead("folder", "Материалы", "Статьи и файлы программы")}
+        ${items.length ? `<div class="media-grid">${items.map(App.contentCard).join("")}</div>` : `<div class="card soft">${App.empty("folder", "Материалов пока нет")}</div>`}`;
+    },
+    mount(el) { App.bindContentCards(el); },
+  };
+
+  // Ссылка-приглашение для уже вошедшего пользователя
+  P.join = {
+    crumbs: ["Приглашение"],
+    async render(el, code) {
+      let inv;
+      try { inv = await App.get(`/api/invite/${encodeURIComponent(code)}`); }
+      catch (e) { el.innerHTML = `<div class="card soft narrow">${App.empty("lock", "Приглашение недействительно", e.message)}</div>`; return; }
+      if (App.me.tariff?.name === inv.tariff) { location.hash = "#/" + App.home(); return; }
+      el._code = code;
+      el.innerHTML = `<div class="card narrow center">${icon("gift", "gold big")}<h2>Доступ к «${esc(inv.tariff)}»</h2>
+        ${inv.description ? `<p class="muted">${esc(inv.description)}</p>` : ""}
+        ${App.me.tariff ? `<p class="hint">Ваш текущий тариф «${esc(App.me.tariff.name)}» будет заменён.</p>` : ""}
+        ${inv.days ? `<p class="hint">Доступ на ${inv.days} дн.</p>` : ""}
+        <button class="btn primary block" id="activate">Активировать</button></div>`;
+    },
+    mount(el) {
+      $("#activate", el)?.addEventListener("click", async () => {
+        try { await App.post(`/api/invite/${encodeURIComponent(el._code)}/activate`); await App.reloadConfig(); App.toast("Доступ активирован"); location.hash = "#/" + App.home(); }
+        catch (e) { App.fail(e); }
+      });
     },
   };
 
@@ -136,6 +336,7 @@
     }));
 
   P.traffic = {
+    feature: "traffic",
     crumbs: ["Закуп трафика"],
     async render(el) {
       const t = await App.get("/api/traffic");
@@ -260,6 +461,7 @@
   const offerFilters = { q: "", partner: "", type: "" };
 
   P.offers = {
+    feature: "offers",
     crumbs: ["Партнёрка", "Офферы"],
     async render(el) {
       const data = await App.get("/api/offers");
@@ -271,7 +473,7 @@
         ${partners.length > 1 ? `<div class="tabs" id="ptabs"><button class="tab" data-p="">Все</button>${partners.map((p) => `<button class="tab" data-p="${esc(p)}">${esc(p)}</button>`).join("")}</div>` : ""}
         ${s.bonus_enabled ? `<div class="promo"><span class="gift">${icon("gift")}</span>
           <div class="flex1"><h3>${esc(s.bonus_title)}</h3>${s.bonus_badge ? App.badge(s.bonus_badge) : ""}<p>${nl2br(s.bonus_text)}</p>${s.bonus_note ? `<small>${nl2br(s.bonus_note)}</small>` : ""}</div>
-          ${s.section_billing ? `<a class="btn accent-o" href="#/billing">Тарифы →</a>` : ""}</div>` : ""}
+          ${App.can("billing") ? `<a class="btn accent-o" href="#/billing">Тарифы →</a>` : ""}</div>` : ""}
         ${accessBanner(data.links_access)}
         <div class="filters">
           <div class="input-icon">${icon("search")}<input class="input" id="oq" placeholder="Поиск по названию" value="${esc(offerFilters.q)}"></div>
@@ -305,6 +507,7 @@
 
   // ================= Избранное и ссылки =================
   P.favorites = {
+    feature: "favorites",
     crumbs: ["Партнёрка", "Избранное и ссылки"],
     async render(el) {
       const [data, links] = await Promise.all([App.get("/api/offers"), App.get("/api/links")]);
@@ -351,6 +554,7 @@
     : `<div class="card soft">${App.empty("chat", "Обращений пока нет")}</div>`;
 
   P.conversions = {
+    feature: "conversions",
     crumbs: ["Партнёрка", "Заявки"],
     async render(el) {
       const [data, tickets] = await Promise.all([App.get("/api/offers"), App.get("/api/tickets?topic=conversion")]);
@@ -413,6 +617,7 @@
 
   // ================= Статистика =================
   P.stats = {
+    feature: "stats",
     crumbs: ["Партнёрка", "Статистика"],
     async render(el) {
       const data = await App.get("/api/offers");
@@ -469,6 +674,7 @@
 
   // ================= Доходы =================
   P.income = {
+    feature: "income",
     crumbs: ["Доходы"],
     async render(el) {
       const d = await App.get("/api/income");
@@ -497,6 +703,7 @@
 
   // ================= Поддержка =================
   P.support = {
+    feature: "support",
     crumbs: ["Поддержка"],
     async render(el) {
       const tickets = await App.get("/api/tickets");
@@ -511,6 +718,7 @@
   App.messagesHtml = messagesHtml;
 
   P.ticket = {
+    feature: "support",
     crumbs: ["Поддержка", "Обращение"],
     async render(el, id) {
       const t = await App.get(`/api/tickets/${+id}`);
@@ -598,6 +806,7 @@
 
   // ================= Тарифы =================
   P.billing = {
+    feature: "billing",
     crumbs: ["Подписка"],
     async render(el) {
       const d = await App.get("/api/tariffs");

@@ -224,13 +224,22 @@ def test_tickets_and_news(app):
     assert other.get(f"/api/tickets/{tid}").status_code == 404
 
 
-def test_settings_and_sections(app):
+def test_settings_and_tariff_features(app):
     admin = login(app, "admin@test.ru", "adminpass123")
-    assert admin.put("/api/admin/settings", json={"brand_name": "Тест", "section_traffic": False}, headers=H).status_code == 200
+    assert admin.put("/api/admin/settings", json={"brand_name": "Тест"}, headers=H).status_code == 200
     u = register(app)
     cfg = u.get("/api/config").json["data"]
-    assert cfg["settings"]["brand_name"] == "Тест" and cfg["settings"]["section_traffic"] is False
-    assert u.get("/api/traffic").status_code == 404
+    assert cfg["settings"]["brand_name"] == "Тест"
+    assert "traffic" in cfg["me"]["features"] and "learning" not in cfg["me"]["features"]
+    assert u.get("/api/traffic").status_code == 200
+
+    # Снимаем галочку «Закуп трафика» у тарифа по умолчанию
+    basic = next(t for t in admin.get("/api/admin/r/tariffs").json["data"] if t["is_default"])
+    feats = [f for f in basic["features"] if f != "traffic"]
+    assert admin.put(f"/api/admin/r/tariffs/{basic['id']}", json={"features": feats}, headers=H).status_code == 200
+    assert "traffic" not in u.get("/api/me").json["data"]["features"]
+    assert u.get("/api/traffic").status_code == 403
+
     admin.put("/api/admin/settings", json={"allow_registration": False}, headers=H)
     assert post(client(app), "/api/auth/register", {"email": "x@y.ru", "password": "12345678"}).status_code == 403
 

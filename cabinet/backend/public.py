@@ -3,13 +3,13 @@ import hashlib
 import hmac
 from datetime import timedelta
 
-from flask import Blueprint, abort, redirect, render_template_string, request
+from flask import Blueprint, Response, abort, g, redirect, render_template_string, request
 from markupsafe import escape
 
 from . import settings, telegram
-from .auth import check_rate, client_ip
+from .auth import check_rate, client_ip, load_user
 from .db import db, utcnow
-from .models import Click, OfferLink, Setting, User
+from .models import Article, Click, Lesson, Material, OfferLink, Program, Setting, User
 from .services import create_conversion
 from .util import ApiError, clean_inn, clean_str
 
@@ -123,3 +123,25 @@ def tg_webhook():
         else:
             telegram.send(chat_id, "Чтобы привязать Telegram, нажмите «Привязать» в профиле личного кабинета.")
     return {"ok": True}
+
+
+COVER_KINDS = {"articles": Article, "materials": Material, "lessons": Lesson, "programs": Program}
+
+
+@bp.get("/media/<kind>/<int:oid>/cover")
+def cover(kind, oid):
+    load_user()
+    model = COVER_KINDS.get(kind)
+    if not g.user or not model:
+        abort(404)
+    obj = db.get(model, oid)
+    if not obj or not obj.cover_mime or not obj.cover_data:
+        abort(404)
+    # Адрес содержит ?v=версия, поэтому картинку можно долго кешировать
+    return Response(obj.cover_data, mimetype=obj.cover_mime,
+                    headers={"Cache-Control": "private, max-age=31536000, immutable"})
+
+
+@bp.get("/join/<code>")
+def join(code):
+    return redirect(f"/#/join/{code}", code=302)

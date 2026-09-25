@@ -8,19 +8,20 @@ from datetime import timedelta
 from flask import Blueprint, Response, g, request
 from sqlalchemy import func, or_
 
-from . import partner_api, settings, telegram
+from . import features, media, partner_api, settings, telegram
 from .api import conversions_query, ser_ticket
 from .auth import admin_required, hash_password, validate_password
 from .db import db, utcnow
 from .models import (
-    Article, Click, Conversion, Material, News, Offer, OfferLink, Purchase, Setting, Tariff, TeamMember,
+    Article, ArticleProgram, Click, Conversion, Lesson, Material, MaterialProgram, News, Offer, OfferLink,
+    Program, Purchase, Setting, Step, StepTask, Tariff, TeamMember,
     Ticket, TicketMessage, TopUpRequest, TrafficRow, User, UserSession,
 )
 from .services import (
     change_balance, create_conversion, ser_conversion, ser_link, ser_tariff, ser_user,
     set_conversion_status, link_counts,
 )
-from .util import ApiError, clean_email, clean_inn, clean_str, clean_url, iso, ok, parse_date, rub, to_kop
+from .util import ApiError, clean_email, clean_inn, clean_str, clean_url, iso, new_code, ok, parse_date, rub, to_kop
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
@@ -196,7 +197,9 @@ RESOURCES = {
         ("title", "str", "Заголовок", True), ("description", "str", "Краткое описание", False),
         ("category", "str", "Категория", False), ("body", "text", "Текст статьи", False),
         ("url", "url", "Внешняя ссылка (вместо текста)", False),
-        ("min_tariff_id", "tariff", "Минимальный тариф", False),
+        ("min_tariff_id", "tariff", "Минимальный уровень тарифа (для «Мануалов»)", False),
+        ("show_in_manuals", "bool", "Показывать в «Мануалах»", False),
+        ("program_ids", "programs", "Показывать в программах обучения", False),
         ("is_published", "bool", "Опубликована", False), ("sort", "int", "Порядок", False),
     ], (Article.sort, Article.created_at.desc())),
     "news": (News, [
@@ -207,13 +210,33 @@ RESOURCES = {
         ("links", "text", "Ссылки / контакты (по одной на строку)", False), ("sort", "int", "Порядок", False),
     ], (TeamMember.sort, TeamMember.id)),
     "tariffs": (Tariff, [
-        ("code", "str", "Код (латиницей)", True), ("name", "str", "Название", True),
-        ("price", "money", "Цена, ₽", False), ("period_days", "int", "Срок, дней", False),
-        ("rate", "int", "Ставка, % от базовой выплаты", False), ("level", "int", "Уровень доступа", False),
+        ("name", "str", "Название", True), ("code", "str", "Код (латиницей, для системы)", True),
+        ("features", "features", "Разделы, которые видит человек на этом тарифе", False),
+        ("program_id", "program", "Программа обучения (для раздела «Обучение»)", False),
+        ("invite_enabled", "bool", "Регистрация по ссылке-приглашению", False),
+        ("invite_days", "int", "Доступ по приглашению, дней (0 — бессрочно)", False),
         ("description", "text", "Описание", False),
-        ("is_default", "bool", "Тариф по умолчанию", False), ("is_public", "bool", "Доступен для покупки", False),
+        ("price", "money", "Цена, ₽ (для покупки с баланса)", False), ("period_days", "int", "Срок при покупке, дней", False),
+        ("rate", "int", "Ставка по офферам, % от базовой выплаты", False), ("level", "int", "Уровень доступа к статьям", False),
+        ("is_default", "bool", "Тариф по умолчанию (для новых регистраций)", False),
+        ("is_public", "bool", "Показывать в разделе «Подписка» для покупки", False),
     ], (Tariff.level, Tariff.id)),
+    "programs": (Program, [
+        ("title", "str", "Название программы", True), ("description", "text", "Описание", False),
+    ], (Program.id,)),
+    "lessons": (Lesson, [
+        ("program_id", "program", "Программа", True), ("title", "str", "Название урока", True),
+        ("video_url", "url", "Ссылка на видео (RuTube, VK Видео, YouTube…)", False),
+        ("duration", "str", "Длительность (например, «15 мин»)", False),
+        ("body", "text", "Описание урока", False),
+        ("is_published", "bool", "Опубликован", False), ("sort", "int", "Порядок", False),
+    ], (Lesson.program_id, Lesson.sort, Lesson.id)),
 }
+# Откуда автоматически подтягивать превью
+COVER_SOURCE = {"articles": "url", "lessons": "video_url", "materials": "url", "programs": None}
+COVER_MODELS = {"articles": Article, "lessons": Lesson, "materials": Material, "programs": Program}
+REORDER_MODELS = {"offers": Offer, "articles": Article, "team": TeamMember, "lessons": Lesson,
+                  "materials": Material, "steps": Step}
 
 
 def res_config(name):
@@ -222,13 +245,40 @@ def res_config(name):
     return RESOURCES[name]
 
 
+def placement_ids(obj):
+    if isinstance(obj, Article):
+        return [r[0] for r in db.query(ArticleProgram.program_id).filter_by(article_id=obj.id)]
+    if isinstance(obj, Material):
+        return [r[0] for r in db.query(MaterialProgram.program_id).filter_by(material_id=obj.id)]
+    return []
+
+
+def set_placement(obj, ids):
+    ids = {int(x) for x in ids or [] if str(x).isdigit()}
+    valid = {r[0] for r in db.query(Program.id).filter(Program.id.in_(ids))} if ids else set()
+    if isinstance(obj, Article):
+        db.query(ArticleProgram).filter_by(article_id=obj.id).delete()
+        db.add_all([ArticleProgram(article_id=obj.id, program_id=i) for i in valid])
+    elif isinstance(obj, Material):
+        db.query(MaterialProgram).filter_by(material_id=obj.id).delete()
+        db.add_all([MaterialProgram(material_id=obj.id, program_id=i) for i in valid])
+
+
 def ser_generic(obj, fields):
     d = {"id": obj.id}
     for name, typ, *_ in fields:
+        if typ == "programs":
+            d[name] = placement_ids(obj)
+            continue
         v = getattr(obj, name)
-        d[name] = rub(v) if typ == "money" else v
+        d[name] = rub(v) if typ == "money" else features.parse(v) if typ == "features" else v
     if hasattr(obj, "created_at"):
         d["created_at"] = iso(obj.created_at)
+    if hasattr(obj, "cover_mime"):
+        kind = next(k for k, m in COVER_MODELS.items() if isinstance(obj, m))
+        d["cover"] = media.cover_link(kind, obj)
+    if isinstance(obj, Tariff):
+        d["invite_code"] = obj.invite_code
     return d
 
 
@@ -258,13 +308,26 @@ def apply_fields(obj, fields, data, creating):
             v = int(v) if v else None
             if v and not db.get(Tariff, v):
                 raise ApiError("Тариф не найден")
+        elif typ == "program":
+            v = int(v) if v else None
+            if v and not db.get(Program, v):
+                raise ApiError("Программа не найдена")
+            if required and not v:
+                raise ApiError(f"Заполните поле «{label}»")
+        elif typ == "features":
+            if not isinstance(v, list):
+                raise ApiError("Разделы тарифа: ожидается список")
+            v = features.dump(v)
+        elif typ == "programs":
+            continue  # сохраняется в after_save
         setattr(obj, name, v)
 
 
 @bp.get("/schema")
 def schema():
-    return ok({name: [{"name": f[0], "type": f[1], "label": f[2], "required": f[3]} for f in cfg[1]]
-               for name, cfg in RESOURCES.items()})
+    return ok({"resources": {name: [{"name": f[0], "type": f[1], "label": f[2], "required": f[3]} for f in cfg[1]]
+                             for name, cfg in RESOURCES.items()},
+               "features": [{"key": k, "label": l} for k, l in features.FEATURES]})
 
 
 @bp.get("/r/<name>")
@@ -278,10 +341,16 @@ def res_create(name):
     model, fields, _ = res_config(name)
     obj = model()
     for name_, typ, *_ in fields:  # значения по умолчанию для bool
-        if typ == "bool" and name_ in ("is_active", "is_published", "is_public"):
+        if typ == "bool" and name_ in ("is_active", "is_published", "is_public", "show_in_manuals"):
             setattr(obj, name_, True)
     d = body()
     apply_fields(obj, fields, d, creating=True)
+    if hasattr(model, "sort") and not d.get("sort"):
+        # Новая запись встаёт в конец списка (уроки — в конец своей программы)
+        q = db.query(func.max(model.sort))
+        if model is Lesson:
+            q = q.filter(Lesson.program_id == obj.program_id)
+        obj.sort = (q.scalar() or 0) + 1
     db.add(obj)
     db.flush()
     after_save(name, obj, d, created=True)
@@ -316,11 +385,15 @@ def res_delete(name, oid):
 
 
 def after_save(name, obj, data, created):
+    if "program_ids" in data and name == "articles":
+        set_placement(obj, data["program_ids"])
     if name == "tariffs":
         if db.query(Tariff).filter(Tariff.code == obj.code, Tariff.id != obj.id).first():
             raise ApiError("Тариф с таким кодом уже есть")
         if obj.is_default:
             db.query(Tariff).filter(Tariff.id != obj.id).update({"is_default": False})
+        if not obj.invite_code:
+            obj.invite_code = new_code(12)
     if name == "news" and created and data.get("broadcast") and telegram.enabled():
         text = f"{obj.title}\n\n{obj.body}"[:4000]
         for u in db.query(User).filter(User.chat_id != "", User.notify.is_(True), User.is_blocked.is_(False)):
@@ -330,7 +403,8 @@ def after_save(name, obj, data, created):
 # ================= материалы (файлы) =================
 def ser_material(m):
     return {"id": m.id, "title": m.title, "description": m.description, "url": m.url, "filename": m.filename,
-            "size": m.size, "sort": m.sort, "created_at": iso(m.created_at)}
+            "size": m.size, "sort": m.sort, "created_at": iso(m.created_at), "show_in_manuals": m.show_in_manuals,
+            "program_ids": placement_ids(m), "cover": media.cover_link("materials", m)}
 
 
 def fill_material(m, creating):
@@ -343,6 +417,8 @@ def fill_material(m, creating):
         m.url = clean_url(f.get("url"), "Ссылка")
     if "sort" in f:
         m.sort = int(f.get("sort") or 0)
+    if "show_in_manuals" in f:
+        m.show_in_manuals = f.get("show_in_manuals") in ("1", "true", "on")
     file = request.files.get("file")
     if file and file.filename:
         data = file.read()
@@ -363,6 +439,9 @@ def material_create():
     m = Material()
     fill_material(m, True)
     db.add(m)
+    db.flush()
+    if "program_ids" in request.form:
+        set_placement(m, request.form.getlist("program_ids"))
     db.commit()
     return ok(ser_material(m))
 
@@ -373,6 +452,8 @@ def material_update(mid):
     if not m:
         raise ApiError("Материал не найден", 404)
     fill_material(m, False)
+    if "program_ids" in request.form:
+        set_placement(m, request.form.getlist("program_ids"))
     db.commit()
     return ok(ser_material(m))
 
@@ -650,6 +731,142 @@ def ticket_status(tid):
     t.status, t.updated_at = st, utcnow()
     db.commit()
     return ok()
+
+
+# ================= обучение: шаги роадмапа =================
+TARGET_TYPES = ("", "lesson", "article", "material", "url")
+
+
+def ser_step(st):
+    return {"id": st.id, "program_id": st.program_id, "title": st.title, "description": st.description,
+            "target_type": st.target_type, "target_id": st.target_id, "target_url": st.target_url, "sort": st.sort,
+            "tasks": [{"id": t.id, "text": t.text} for t in st.tasks]}
+
+
+@bp.get("/programs/<int:pid>/steps")
+def steps(pid):
+    return ok([ser_step(st) for st in db.query(Step).filter_by(program_id=pid).order_by(Step.sort, Step.id)])
+
+
+def fill_step(st, d):
+    st.title = clean_str(d.get("title"), "Название шага", 200, True)
+    st.description = clean_str(d.get("description"), "Описание", 5000)
+    t = d.get("target_type") or ""
+    if t not in TARGET_TYPES:
+        raise ApiError("Неверный тип ссылки шага")
+    st.target_type = t
+    st.target_id = int(d["target_id"]) if t in ("lesson", "article", "material") and d.get("target_id") else None
+    st.target_url = clean_url(d.get("target_url"), "Ссылка") if t == "url" else ""
+    if t in ("lesson", "article", "material") and not st.target_id:
+        raise ApiError("Выберите, куда ведёт шаг")
+    if t == "url" and not st.target_url:
+        raise ApiError("Укажите ссылку")
+    # Задачи: сохраняем id существующих, чтобы не терять отметки учеников
+    incoming = [x for x in (d.get("tasks") or []) if str(x.get("text") or "").strip()]
+    by_id = {t.id: t for t in st.tasks}
+    keep = []
+    for i, x in enumerate(incoming):
+        text = clean_str(x.get("text"), "Задача", 500, True)
+        task = by_id.get(int(x["id"])) if x.get("id") else None
+        if task:
+            task.text, task.sort = text, i
+        else:
+            task = StepTask(text=text, sort=i)
+            st.tasks.append(task)
+        keep.append(task)
+    for t in list(st.tasks):
+        if t not in keep:
+            st.tasks.remove(t)
+
+
+@bp.post("/programs/<int:pid>/steps")
+def step_create(pid):
+    if not db.get(Program, pid):
+        raise ApiError("Программа не найдена", 404)
+    last = db.query(func.max(Step.sort)).filter_by(program_id=pid).scalar() or 0
+    st = Step(program_id=pid, sort=last + 1)
+    fill_step(st, body())
+    db.add(st)
+    db.commit()
+    return ok(ser_step(st))
+
+
+@bp.put("/steps/<int:sid>")
+def step_update(sid):
+    st = db.get(Step, sid)
+    if not st:
+        raise ApiError("Шаг не найден", 404)
+    fill_step(st, body())
+    db.commit()
+    return ok(ser_step(st))
+
+
+@bp.delete("/steps/<int:sid>")
+def step_delete(sid):
+    st = db.get(Step, sid)
+    if st:
+        db.delete(st)
+        db.commit()
+    return ok()
+
+
+@bp.post("/reorder/<name>")
+def reorder(name):
+    model = REORDER_MODELS.get(name)
+    if not model:
+        raise ApiError("Нельзя упорядочить этот раздел", 404)
+    ids = [int(x) for x in body().get("ids") or []]
+    for i, oid in enumerate(ids):
+        obj = db.get(model, oid)
+        if obj:
+            obj.sort = i
+    db.commit()
+    return ok()
+
+
+# ================= превью =================
+def cover_obj(kind, oid):
+    model = COVER_MODELS.get(kind)
+    obj = db.get(model, oid) if model else None
+    if not obj:
+        raise ApiError("Запись не найдена", 404)
+    return obj
+
+
+@bp.post("/cover/<kind>/<int:oid>")
+def cover_set(kind, oid):
+    """Файл (multipart «file»), ссылка на картинку {"url"} или автоподбор {"auto": true}."""
+    obj = cover_obj(kind, oid)
+    file = request.files.get("file")
+    d = body()
+    if file and file.filename:
+        media.set_cover_bytes(obj, file.read())
+    elif d.get("url"):
+        media.set_cover_url(obj, clean_url(d["url"], "Ссылка на картинку", True))
+    elif d.get("auto"):
+        src_field = COVER_SOURCE.get(kind)
+        media.set_cover_auto(obj, d.get("source") or (getattr(obj, src_field) if src_field else ""))
+    else:
+        raise ApiError("Загрузите картинку, вставьте ссылку или выберите автоподбор")
+    db.commit()
+    return ok({"cover": media.cover_link(kind, obj)})
+
+
+@bp.delete("/cover/<kind>/<int:oid>")
+def cover_delete(kind, oid):
+    media.clear_cover(cover_obj(kind, oid))
+    db.commit()
+    return ok()
+
+
+@bp.post("/tariffs/<int:tid>/invite")
+def invite_regenerate(tid):
+    t = db.get(Tariff, tid)
+    if not t:
+        raise ApiError("Тариф не найден", 404)
+    t.invite_code = new_code(12)
+    db.commit()
+    return ok({"invite_code": t.invite_code})
 
 
 # ================= настройки =================
