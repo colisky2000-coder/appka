@@ -11,7 +11,6 @@
     { id: "a-learning", label: "Обучение", icon: "trend" },
     { id: "a-offers", label: "Офферы", icon: "handshake" },
     { id: "a-topups", label: "Пополнения", icon: "card", badge: true },
-    { id: "a-traffic", label: "Трафик", icon: "cart" },
     { id: "a-tickets", label: "Поддержка", icon: "chat", badge: true },
     { id: "a-articles", label: "Статьи", icon: "book" },
     { id: "a-materials", label: "Материалы", icon: "folder" },
@@ -416,7 +415,6 @@
           ${card("#/a-links", "link", "Ссылки ждут выдачи", o.links_requested, "запрошены пользователями", o.links_requested ? "accent" : "")}
           ${card("#/a-topups", "card", "Пополнения", o.topups_pending, "ждут проверки", o.topups_pending ? "accent" : "")}
           ${card("#/a-tickets", "chat", "Обращения", o.tickets_open, "ждут ответа", o.tickets_open ? "accent" : "")}
-          ${card("#/a-traffic", "cart", "Трафик", o.traffic_available, "свободных строк")}
         </div>
         <div class="card"><div class="card-title">${icon("link")}Интеграции</div>
           <div class="setting"><div class="txt"><b>Партнёрский API</b><span class="muted">${o.partner_api
@@ -480,7 +478,7 @@
     App.modal(u.email, `
       <div class="grid g3 mb small">
         <div><span class="hint">Заявок</span><br><a class="link-btn" href="#/a-conversions/user=${u.id}">${u.conversions}</a></div>
-        <div><span class="hint">Ссылок</span><br>${u.links}</div><div><span class="hint">Покупок трафика</span><br>${u.purchases}</div></div>
+        <div><span class="hint">Ссылок</span><br>${u.links}</div></div>
       <form id="ue">
         <div class="grid g2">
           <div class="field"><label>Email</label><input class="input" name="email" value="${esc(u.email)}"></div>
@@ -636,44 +634,6 @@
       form.addEventListener("change", (e) => { if (e.target.name !== "q") { page = 1; load(); } });
       form.addEventListener("submit", (e) => e.preventDefault());
       load();
-    },
-  };
-
-  // ---------- трафик ----------
-  P["a-traffic"] = {
-    admin: true, crumbs: ["Админка", "Трафик"],
-    async render(el) {
-      const t = await App.get("/api/admin/traffic");
-      el.innerHTML = `${App.pageHead("cart", "Трафик", "Загрузка строк для продажи. Цена и формат — в «Настройках».")}
-        <div class="grid g3 mb">
-          <div class="stat"><div class="lbl">${icon("box")}Свободно</div><div class="val ok">${t.available}</div><small>строк в продаже</small></div>
-          <div class="stat"><div class="lbl">${icon("download")}Продано</div><div class="val">${t.sold}</div><small>строк</small></div>
-          <div class="stat"><div class="lbl">${icon("cash")}Цена</div><div class="val">${money(t.price, 2)}</div><small>за строку</small></div></div>
-        <form class="card" id="tu"><div class="card-title">${icon("upload")}Загрузить строки</div>
-          <p class="hint">Одна строка = одна единица трафика. Вставьте текст или загрузите .txt / .csv файл.</p>
-          <div class="field"><textarea class="input mono" name="text" rows="6" placeholder="строка 1&#10;строка 2"></textarea></div>
-          <div class="row"><input type="file" name="file" accept=".txt,.csv,text/plain,text/csv">
-            <label class="row gap8"><input type="checkbox" name="skip_header"> Пропустить первую строку (заголовок)</label></div>
-          <div class="form-error"></div>
-          <div class="row mt"><button class="btn primary" type="submit">${icon("upload")}Загрузить</button><span class="spacer"></span>
-            <button type="button" class="btn sm danger" id="tclear">${icon("trash")}Удалить все непроданные</button></div></form>
-        <div class="card"><div class="card-title">${icon("history")}Покупки</div>
-          ${t.purchases.length ? `<div class="table-wrap"><table><tr><th>Дата</th><th>Пользователь</th><th>Строк</th><th>Сумма</th><th></th></tr>
-            ${t.purchases.map((p) => `<tr><td>${fmtDateTime(p.created_at)}</td><td>${esc(p.user.email)}</td><td>${p.rows}</td><td class="mono">${money(p.total, 2)}</td>
-              <td><a class="link-btn" href="/api/traffic/purchases/${p.id}/download">Скачать</a></td></tr>`).join("")}</table></div>` : App.empty("history", "Покупок пока нет")}</div>`;
-    },
-    mount(el) {
-      App.onSubmit($("#tu", el), async (d, f) => {
-        const skip = f.skip_header.checked ? "?skip_header=1" : "";
-        let r;
-        if (f.file.files[0]) { const fd = new FormData(); fd.append("file", f.file.files[0]); r = await App.api("POST", "/api/admin/traffic/rows" + skip, undefined, { form: fd }); }
-        else r = await App.api("POST", "/api/admin/traffic/rows" + skip, { text: d.text });
-        App.toast(`Добавлено строк: ${r.added}`); App.rerender();
-      });
-      $("#tclear", el).onclick = async () => {
-        if (!(await App.confirm("Удалить все непроданные строки?", "Удалить"))) return;
-        try { const r = await App.del("/api/admin/traffic/rows"); App.toast(`Удалено: ${r.deleted}`); App.rerender(); } catch (e) { App.fail(e); }
-      };
     },
   };
 

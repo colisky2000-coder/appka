@@ -228,7 +228,7 @@ window.App = (() => {
   };
   // Первая доступная страница — «главная» для этого тарифа
   const HOME_ORDER = [["dashboard", "dashboard"], ["learn", "learning"], ["manuals", "manuals"], ["offers", "offers"],
-    ["favorites", "favorites"], ["conversions", "conversions"], ["stats", "stats"], ["traffic", "traffic"], ["support", "support"]];
+    ["favorites", "favorites"], ["conversions", "conversions"], ["stats", "stats"], ["support", "support"]];
   App.home = () => (HOME_ORDER.find(([, f]) => App.can(f)) || ["profile"])[0];
 
   function menu() {
@@ -241,7 +241,6 @@ window.App = (() => {
       { id: "learn-materials", label: "Материалы", icon: "folder" },
     ] });
     if (can("manuals")) items.push({ id: "manuals", label: "Мануалы", icon: "book" });
-    if (can("traffic")) items.push({ id: "traffic", label: "Закуп трафика", icon: "cart" });
     const partner = [
       { id: "offers", label: "Офферы", icon: "grid" },
       { id: "favorites", label: "Избранное и ссылки", icon: "star" },

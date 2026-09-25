@@ -74,10 +74,6 @@ def tracked_url(link):
     return f"{public_base()}/go/{link.code}"
 
 
-def form_url(link):
-    return f"{public_base()}/f/{link.code}"
-
-
 def issue_link(user, offer):
     """
     Находит или создаёт персональную ссылку пользователя на оффер.
@@ -110,9 +106,8 @@ def link_counts(link_ids):
 
 def ser_link(link, used=0, clicks=None):
     d = {"id": link.id, "offer_id": link.offer_id, "offer_name": link.offer.name if link.offer else "",
-         "status": link.status, "form_enabled": link.form_enabled, "limit": link.limit, "used": used,
+         "status": link.status, "limit": link.limit, "used": used,
          "url": tracked_url(link) if link.status == "active" else "",
-         "form_url": form_url(link) if link.status == "active" else "",
          "created_at": iso(link.created_at)}
     if clicks is not None:
         d["clicks"] = clicks

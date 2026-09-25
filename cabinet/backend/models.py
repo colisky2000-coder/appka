@@ -119,7 +119,6 @@ class OfferLink(Base):
     code: Mapped[str] = mapped_column(String(16), unique=True, index=True)
     url: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(16), default="requested")  # requested | active | disabled
-    form_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     limit: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
@@ -224,32 +223,12 @@ class Setting(Base):
     value: Mapped[str] = mapped_column(Text, default="")
 
 
-class TrafficRow(Base):
-    __tablename__ = "traffic_rows"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    data: Mapped[str] = mapped_column(Text)
-    purchase_id: Mapped[Optional[int]] = mapped_column(ForeignKey("purchases.id", ondelete="SET NULL"), nullable=True, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-
-class Purchase(Base):
-    __tablename__ = "purchases"
-    id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    rows: Mapped[int] = mapped_column(Integer)
-    price: Mapped[int] = mapped_column(Integer)
-    total: Mapped[int] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
-
-    user: Mapped[User] = relationship()
-
-
 class BalanceTx(Base):
     __tablename__ = "balance_tx"
     id: Mapped[int] = mapped_column(primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     amount: Mapped[int] = mapped_column(Integer)  # +/- копейки
-    kind: Mapped[str] = mapped_column(String(16))  # topup | purchase | tariff | adjust
+    kind: Mapped[str] = mapped_column(String(16))  # topup | tariff | adjust
     note: Mapped[str] = mapped_column(String(300), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 

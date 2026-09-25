@@ -14,8 +14,8 @@ from .auth import admin_required, hash_password, validate_password
 from .db import db, utcnow
 from .models import (
     Article, ArticleProgram, Click, Conversion, Lesson, Material, MaterialProgram, News, Offer, OfferLink,
-    Program, Purchase, Setting, Step, StepTask, Tariff, TeamMember,
-    Ticket, TicketMessage, TopUpRequest, TrafficRow, User, UserSession,
+    Program, Setting, Step, StepTask, Tariff, TeamMember,
+    Ticket, TicketMessage, TopUpRequest, User, UserSession,
 )
 from .services import (
     change_balance, create_conversion, ser_conversion, ser_link, ser_tariff, ser_user,
@@ -53,7 +53,6 @@ def overview():
         "tickets_open": db.query(func.count(Ticket.id)).filter_by(status="open").scalar(),
         "links_requested": db.query(func.count(OfferLink.id)).filter_by(status="requested").scalar(),
         "conversions_new": db.query(func.count(Conversion.id)).filter(Conversion.status.in_(("new", "in_work"))).scalar(),
-        "traffic_available": db.query(func.count(TrafficRow.id)).filter(TrafficRow.purchase_id.is_(None)).scalar(),
         "offers_active": db.query(func.count(Offer.id)).filter_by(is_active=True).scalar(),
         "partner_api": partner_api.is_configured(),
         "telegram": telegram.enabled(),
@@ -106,7 +105,6 @@ def user_detail(uid):
     return ok({**ser_user(u, admin=True),
                "conversions": conv.count(),
                "links": db.query(func.count(OfferLink.id)).filter_by(user_id=uid).scalar(),
-               "purchases": db.query(func.count(Purchase.id)).filter_by(user_id=uid).scalar(),
                "sessions": [{"id": s.id, "ip": s.ip, "user_agent": s.user_agent, "last_active": iso(s.last_active)} for s in sessions]})
 
 
@@ -613,44 +611,6 @@ def conversions_csv():
                     s["status_name"], str(s["amount"]).replace(".", ","), c.comment])
     return Response("﻿" + buf.getvalue(), mimetype="text/csv",
                     headers={"Content-Disposition": "attachment; filename=conversions.csv"})
-
-
-# ================= трафик =================
-@bp.get("/traffic")
-def traffic():
-    purchases = db.query(Purchase).order_by(Purchase.created_at.desc()).limit(200).all()
-    return ok({
-        "available": db.query(func.count(TrafficRow.id)).filter(TrafficRow.purchase_id.is_(None)).scalar(),
-        "sold": db.query(func.count(TrafficRow.id)).filter(TrafficRow.purchase_id.isnot(None)).scalar(),
-        "price": float(settings.get("traffic_price") or 0),
-        "purchases": [{"id": p.id, "rows": p.rows, "total": rub(p.total), "created_at": iso(p.created_at),
-                       "user": {"id": p.user.id, "email": p.user.email}} for p in purchases],
-    })
-
-
-@bp.post("/traffic/rows")
-def traffic_upload():
-    if request.files.get("file"):
-        text = request.files["file"].read().decode("utf-8-sig", errors="replace")
-    else:
-        text = body().get("text") or ""
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if request.args.get("skip_header") == "1" and lines:
-        lines = lines[1:]
-    if not lines:
-        raise ApiError("Нет строк для загрузки")
-    if len(lines) > 200000:
-        raise ApiError("Слишком много строк за раз (макс. 200 000)")
-    db.bulk_save_objects([TrafficRow(data=ln[:2000]) for ln in lines])
-    db.commit()
-    return ok({"added": len(lines)})
-
-
-@bp.delete("/traffic/rows")
-def traffic_clear():
-    n = db.query(TrafficRow).filter(TrafficRow.purchase_id.is_(None)).delete()
-    db.commit()
-    return ok({"deleted": n})
 
 
 # ================= пополнения =================

@@ -7,7 +7,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import create_app  # noqa: E402
 from backend.db import db  # noqa: E402
-from backend.models import TrafficRow, User  # noqa: E402
 
 H = {"X-Requested-With": "fetch"}
 
@@ -82,9 +81,9 @@ def test_non_admin_blocked_from_admin(app):
     assert c.get("/api/admin/overview").status_code == 403
 
 
-def test_offers_links_and_form(app):
+def test_offers_and_links(app):
     admin = login(app, "admin@test.ru", "adminpass123")
-    r = post(admin, "/api/admin/r/offers", {"partner": "Банк", "name": "РКО", "type": "РКО", "payout": "10000", "limit_default": 100})
+    r = post(admin, "/api/admin/r/offers", {"partner": "Банк", "name": "Карта", "type": "Карта", "payout": "10000", "limit_default": 100})
     assert r.status_code == 200, r.json
     oid = r.json["data"]["id"]
 
@@ -113,20 +112,11 @@ def test_offers_links_and_form(app):
     assert r.status_code == 302 and r.headers["Location"] == "https://partner.example/ref"
     anon.get(f"/go/{code}")
 
-    # форма выключена -> 404, включаем
+    # публичной формы заявки больше нет
     assert anon.get(f"/f/{code}").status_code == 404
-    assert u.patch(f"/api/links/{link['id']}", json={"form_enabled": True}, headers=H).status_code == 200
-    assert anon.get(f"/f/{code}").status_code == 200
-    r = anon.post(f"/f/{code}", data={"inn": "123", "fio": "Иван"})
-    assert "ИНН" in r.get_data(as_text=True)
-    r = anon.post(f"/f/{code}", data={"inn": "7707083893", "fio": "Иванов Иван"})
-    assert r.status_code == 302
-
-    convs = u.get("/api/conversions").json["data"]
-    assert len(convs) == 1 and convs[0]["source"] == "form" and convs[0]["amount"] == 10000
 
     stats = u.get("/api/stats").json["data"]
-    assert stats["totals"]["clicks"] == 2 and stats["totals"]["conversions"] == 1
+    assert stats["totals"]["clicks"] == 2
     assert u.get("/api/stats?unique=1").json["data"]["totals"]["clicks"] == 1
     assert u.get("/api/stats.csv").status_code == 200
 
@@ -155,26 +145,16 @@ def test_conversion_status_and_income_and_top(app):
     assert admin.get("/api/admin/conversions.csv").status_code == 200
 
 
-def test_traffic_topup_and_purchase(app):
+def test_topup_balance(app):
     admin = login(app, "admin@test.ru", "adminpass123")
-    assert post(admin, "/api/admin/traffic/rows", {"text": "a,1\nb,2\nc,3\n\n"}).json["data"]["added"] == 3
     u = register(app)
-    t = u.get("/api/traffic").json["data"]
-    assert t["available"] == 3 and t["price"] == 15
-    assert "Недостаточно" in post(u, "/api/traffic/buy", {"rows": 2}).json["error"]
-    assert "свободно 3" in post(u, "/api/traffic/buy", {"rows": 5}).json["error"]
-
+    assert u.get("/api/traffic").status_code == 404
     assert post(u, "/api/topups", {"amount": 100}).status_code == 200
     tid = admin.get("/api/admin/topups?status=pending").json["data"][0]["id"]
     assert post(admin, f"/api/admin/topups/{tid}/approve", {}).status_code == 200
     assert post(admin, f"/api/admin/topups/{tid}/approve", {}).status_code == 400  # повторно нельзя
-
-    r = post(u, "/api/traffic/buy", {"rows": 2})
-    assert r.status_code == 200, r.json
-    t = u.get("/api/traffic").json["data"]
-    assert t["balance"] == 70 and t["available"] == 1 and t["bought_rows"] == 2
-    dl = u.get(f"/api/traffic/purchases/{r.json['data']['id']}/download").get_data(as_text=True)
-    assert dl.splitlines() == ["a,1", "b,2"]
+    b = u.get("/api/balance").json["data"]
+    assert b["balance"] == 100 and b["topups"][0]["status"] == "approved"
 
 
 def test_tariff_purchase(app):
@@ -230,15 +210,16 @@ def test_settings_and_tariff_features(app):
     u = register(app)
     cfg = u.get("/api/config").json["data"]
     assert cfg["settings"]["brand_name"] == "Тест"
-    assert "traffic" in cfg["me"]["features"] and "learning" not in cfg["me"]["features"]
-    assert u.get("/api/traffic").status_code == 200
+    assert "support" in cfg["me"]["features"] and "learning" not in cfg["me"]["features"]
+    assert "traffic" not in cfg["me"]["features"]
+    assert u.get("/api/tickets").status_code == 200
 
-    # Снимаем галочку «Закуп трафика» у тарифа по умолчанию
+    # Снимаем галочку «Поддержка» у тарифа по умолчанию
     basic = next(t for t in admin.get("/api/admin/r/tariffs").json["data"] if t["is_default"])
-    feats = [f for f in basic["features"] if f != "traffic"]
+    feats = [f for f in basic["features"] if f != "support"]
     assert admin.put(f"/api/admin/r/tariffs/{basic['id']}", json={"features": feats}, headers=H).status_code == 200
-    assert "traffic" not in u.get("/api/me").json["data"]["features"]
-    assert u.get("/api/traffic").status_code == 403
+    assert "support" not in u.get("/api/me").json["data"]["features"]
+    assert u.get("/api/tickets").status_code == 403
 
     admin.put("/api/admin/settings", json={"allow_registration": False}, headers=H)
     assert post(client(app), "/api/auth/register", {"email": "x@y.ru", "password": "12345678"}).status_code == 403

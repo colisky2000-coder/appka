@@ -1,4 +1,4 @@
-"""Публичные адреса: редирект по ссылке, форма заявки для клиента, вебхук Telegram."""
+"""Публичные адреса: редирект по ссылке, вебхук Telegram, обложки, приглашения."""
 import hashlib
 import hmac
 from datetime import timedelta
@@ -6,12 +6,10 @@ from datetime import timedelta
 from flask import Blueprint, Response, abort, g, redirect, render_template_string, request
 from markupsafe import escape
 
-from . import settings, telegram
-from .auth import check_rate, client_ip, load_user
+from . import telegram
+from .auth import client_ip, load_user
 from .db import db, utcnow
 from .models import Article, Click, Lesson, Material, OfferLink, Program, Setting, User
-from .services import create_conversion
-from .util import ApiError, clean_inn, clean_str
 
 bp = Blueprint("public", __name__)
 
@@ -42,45 +40,6 @@ def go(code):
     return redirect(link.url, code=302)
 
 
-FORM_HTML = """
-<form method="post" class="card">
-  <h1>{{ offer }}</h1>
-  <p class="muted">{{ partner }}</p>
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
-  <label>ИНН<input name="inn" inputmode="numeric" required value="{{ inn }}" placeholder="10 или 12 цифр"></label>
-  <label>ФИО<input name="fio" required value="{{ fio }}"></label>
-  <label>Телефон<input name="phone" type="tel" value="{{ phone }}" placeholder="необязательно"></label>
-  <input name="website" class="hp" tabindex="-1" autocomplete="off">
-  <button>Отправить и перейти</button>
-  <p class="muted small">{{ note }}</p>
-</form>
-"""
-
-
-@bp.route("/f/<code>", methods=["GET", "POST"])
-def lead_form(code):
-    link = active_link(code)
-    if not link or not link.form_enabled:
-        return render_page("Форма недоступна", "<p>Форма выключена или ссылка неактивна.</p>"), 404
-    ctx = {"offer": link.offer.name, "partner": link.offer.partner, "note": settings.get("form_note"),
-           "error": "", "inn": "", "fio": "", "phone": ""}
-    if request.method == "POST":
-        f = request.form
-        ctx.update(inn=f.get("inn", ""), fio=f.get("fio", ""), phone=f.get("phone", ""))
-        if f.get("website"):  # ловушка для ботов
-            return redirect(f"/go/{link.code}")
-        try:
-            check_rate("form:" + client_ip())
-            create_conversion(link.user, link.offer, clean_inn(f.get("inn")), clean_str(f.get("fio"), "ФИО", 200, True),
-                              clean_str(f.get("phone"), "Телефон", 40), (request.args.get("sub") or "")[:80], link, "form")
-            db.commit()
-            return redirect(f"/go/{link.code}")
-        except ApiError as e:
-            db.rollback()
-            ctx["error"] = e.message
-    return render_page(link.offer.name, render_template_string(FORM_HTML, **ctx))
-
-
 PAGE = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ title }}</title>
 <style>
@@ -96,8 +55,7 @@ button{width:100%;padding:12px;border:0;border-radius:8px;background:#8a6420;col
 
 
 def render_page(title, content_html):
-    if not content_html.lstrip().startswith("<form"):
-        content_html = f'<div class="card"><h1>{escape(title)}</h1>{content_html}</div>'
+    content_html = f'<div class="card"><h1>{escape(title)}</h1>{content_html}</div>'
     return render_template_string(PAGE, title=title, content=content_html)
 
 

@@ -51,6 +51,20 @@ def auto_migrate(engine):
                 conn.execute(text(ddl))
 
 
+# Таблицы удалённых разделов: при запуске стираются вместе с данными
+OBSOLETE_TABLES = ("traffic_rows", "purchases")
+
+
+def drop_obsolete(engine):
+    from sqlalchemy import inspect, text
+
+    have = set(inspect(engine).get_table_names())
+    with engine.begin() as conn:
+        for name in OBSOLETE_TABLES:
+            if name in have:
+                conn.execute(text(f'DROP TABLE "{name}"'))
+
+
 def init_engine(url: str):
     url = normalize_db_url(url)
     kwargs = {"pool_pre_ping": True}

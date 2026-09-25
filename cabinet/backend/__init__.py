@@ -7,7 +7,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from .auth import ensure_admin_from_env, hash_password, load_user, validate_password
-from .db import Base, auto_migrate, db, init_engine
+from .db import Base, auto_migrate, db, drop_obsolete, init_engine
 from .util import ApiError
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +27,7 @@ def create_app(database_url=None):
     from . import models  # noqa: F401 — регистрирует таблицы
     Base.metadata.create_all(engine)
     auto_migrate(engine)
+    drop_obsolete(engine)
 
     from .seed import seed_defaults, seed_demo
     seed_defaults()

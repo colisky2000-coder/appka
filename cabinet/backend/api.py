@@ -15,8 +15,8 @@ from .auth import (
 from .db import db, utcnow
 from .models import (
     CONVERSION_STATUSES, Article, ArticleProgram, BalanceTx, Click, Conversion, Favorite, Lesson, LessonDone,
-    Material, MaterialProgram, News, NewsRead, Offer, OfferLink, Program, Purchase, Step, StepDone, StepTask,
-    Tariff, TaskDone, TeamMember, Ticket, TicketMessage, TopUpRequest, TrafficRow, User, UserSession,
+    Material, MaterialProgram, News, NewsRead, Offer, OfferLink, Program, Step, StepDone, StepTask,
+    Tariff, TaskDone, TeamMember, Ticket, TicketMessage, TopUpRequest, User, UserSession,
 )
 from .services import (
     change_balance, create_conversion, default_tariff, issue_link, link_counts, money_summary,
@@ -565,22 +565,6 @@ def get_link(oid):
     return ok(ser_link(link, link_counts([link.id]).get(link.id, 0)))
 
 
-@bp.patch("/links/<int:lid>")
-@login_required
-def update_link(lid):
-    require("offers", "favorites")
-    link = db.query(OfferLink).filter_by(id=lid, user_id=g.user.id).first()
-    if not link:
-        raise ApiError("Ссылка не найдена", 404)
-    d = body()
-    if "form_enabled" in d:
-        if link.status != "active":
-            raise ApiError("Ссылка ещё не активна")
-        link.form_enabled = bool(d["form_enabled"])
-    db.commit()
-    return ok(ser_link(link, link_counts([link.id]).get(link.id, 0)))
-
-
 @bp.get("/links")
 @login_required
 def my_links():
@@ -739,71 +723,23 @@ def income():
                "transactions": [{"amount": rub(t.amount), "kind": t.kind, "note": t.note, "created_at": iso(t.created_at)} for t in tx]})
 
 
-# ================= трафик / баланс =================
-def traffic_price():
-    return to_kop(settings.get("traffic_price"))
-
-
-@bp.get("/traffic")
+# ================= баланс =================
+@bp.get("/balance")
 @login_required
-def traffic():
-    require("traffic")
-    purchases = db.query(Purchase).filter_by(user_id=g.user.id).order_by(Purchase.created_at.desc()).all()
+def balance():
+    require("billing")
     topups = db.query(TopUpRequest).filter_by(user_id=g.user.id).order_by(TopUpRequest.created_at.desc()).limit(20).all()
     return ok({
-        "balance": rub(g.user.balance), "price": rub(traffic_price()),
-        "available": db.query(func.count(TrafficRow.id)).filter(TrafficRow.purchase_id.is_(None)).scalar(),
-        "format": settings.get("traffic_format"), "topup_instructions": settings.get("topup_instructions"),
-        "bought_rows": sum(p.rows for p in purchases), "spent": rub(sum(p.total for p in purchases)),
-        "purchases": [{"id": p.id, "rows": p.rows, "total": rub(p.total), "created_at": iso(p.created_at)} for p in purchases],
+        "balance": rub(g.user.balance), "topup_instructions": settings.get("topup_instructions"),
         "topups": [{"id": t.id, "amount": rub(t.amount), "status": t.status, "admin_note": t.admin_note,
                     "created_at": iso(t.created_at)} for t in topups],
     })
 
 
-@bp.post("/traffic/buy")
-@login_required
-def traffic_buy():
-    require("traffic")
-    try:
-        n = int(body().get("rows"))
-    except (TypeError, ValueError):
-        raise ApiError("Укажите количество строк")
-    if n < 1 or n > 100000:
-        raise ApiError("Некорректное количество строк")
-    price = traffic_price()
-    rows = (db.query(TrafficRow).filter(TrafficRow.purchase_id.is_(None)).order_by(TrafficRow.id)
-            .limit(n).with_for_update(skip_locked=True).all())
-    if len(rows) < n:
-        raise ApiError(f"Столько строк нет в наличии: свободно {len(rows)}")
-    total = price * n
-    change_balance(g.user.id, -total, "purchase", f"Покупка {n} строк трафика")
-    p = Purchase(user_id=g.user.id, rows=n, price=price, total=total)
-    db.add(p)
-    db.flush()
-    for r in rows:
-        r.purchase_id = p.id
-    db.commit()
-    return ok({"id": p.id})
-
-
-@bp.get("/traffic/purchases/<int:pid>/download")
-@login_required
-def purchase_download(pid):
-    p = db.query(Purchase).filter_by(id=pid, user_id=g.user.id).first()
-    if not p and g.user.is_admin:
-        p = db.get(Purchase, pid)
-    if not p:
-        raise ApiError("Покупка не найдена", 404)
-    lines = [r.data for r in db.query(TrafficRow).filter_by(purchase_id=p.id).order_by(TrafficRow.id)]
-    return Response("\n".join(lines) + "\n", mimetype="text/plain; charset=utf-8",
-                    headers={"Content-Disposition": f"attachment; filename=traffic_{p.id}.txt"})
-
-
 @bp.post("/topups")
 @login_required
 def topup_request():
-    require("traffic")
+    require("billing")
     d = body()
     amount = to_kop(d.get("amount"))
     if amount < 100:

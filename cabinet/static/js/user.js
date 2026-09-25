@@ -324,7 +324,7 @@
     },
   };
 
-  // ================= Закуп трафика =================
+  // ================= Баланс =================
   const topupDialog = (instructions) => App.modal("Пополнить баланс", `
     <form id="tu">${instructions ? `<div class="notice">${linkify(instructions)}</div>` : ""}
       <div class="field"><label>Сумма, ₽</label><input class="input" name="amount" type="number" min="1" step="0.01" required></div>
@@ -334,70 +334,6 @@
     (m, close) => App.onSubmit($("#tu", m), async (d) => {
       await App.post("/api/topups", d); close(); App.toast("Заявка отправлена — баланс пополнится после проверки"); App.rerender();
     }));
-
-  P.traffic = {
-    feature: "traffic",
-    crumbs: ["Закуп трафика"],
-    async render(el) {
-      const t = await App.get("/api/traffic");
-      el._data = t;
-      const tStatus = { pending: "На проверке", approved: "Зачислено", rejected: "Отклонено" };
-      el.innerHTML = `${App.pageHead("cart", "Закуп трафика", "Покупка строк трафика для работы")}
-        <div class="grid g3 mb">
-          <div class="stat"><div class="lbl">${icon("wallet", "gold")}Ваш баланс</div><div class="val">${money(t.balance, 2)}</div>
-            <button class="btn ghost sm pl0" data-topup>${icon("card")}Пополнить баланс</button></div>
-          <div class="stat"><div class="lbl">${icon("box", "ok")}Свободно строк</div><div class="val ok">${t.available}</div><small>по ${money(t.price, 2)} за строку</small></div>
-          <div class="stat"><div class="lbl">${icon("download", "info")}Куплено вами</div><div class="val info">${t.bought_rows}</div><small>на ${money(t.spent, 2)} за ${t.purchases.length} покупок</small></div>
-        </div>
-        <div class="card">
-          <h3 class="card-h">Купить строки</h3>
-          <p class="hint mb">Формат строки: ${esc(t.format)}</p>
-          <div class="field"><label>Количество строк</label>
-            <div class="qty"><button class="sq" data-d="-1" aria-label="Меньше">${icon("minus")}</button><input class="input" id="qty" type="number" min="1" value="${Math.min(100, Math.max(1, t.available))}">
-            <button class="sq" data-d="1" aria-label="Больше">${icon("plus")}</button><button class="btn sm" id="all">всё</button></div></div>
-          <div class="summary">
-            <div class="ln"><span>Цена за строку</span><span class="muted">${money(t.price, 2)}</span></div>
-            <div class="ln"><span>Строк</span><span class="muted" id="s-rows"></span></div>
-            <div class="ln total"><span class="muted">Итого</span><b id="s-total"></b></div>
-            <button class="btn block primary mt" id="buy">${icon("cart")}Купить</button>
-          </div>
-          <div id="buy-err"></div>
-        </div>
-        ${t.topups.length ? `<div class="card"><div class="card-title">${icon("card")}Заявки на пополнение</div>
-          <div class="table-wrap"><table><tr><th>Дата</th><th>Сумма</th><th>Статус</th><th>Комментарий</th></tr>
-          ${t.topups.map((x) => `<tr><td>${fmtDateTime(x.created_at)}</td><td class="mono">${money(x.amount, 2)}</td><td>${App.badge(tStatus[x.status] || x.status, App.statusTone(x.status === "approved" ? "active" : x.status === "rejected" ? "rejected" : "pending"))}</td><td>${esc(x.admin_note)}</td></tr>`).join("")}</table></div></div>` : ""}
-        <div class="card"><div class="card-title">${icon("history")}Мои покупки</div>
-          ${t.purchases.length ? `<div class="table-wrap"><table><tr><th>Дата</th><th>Строк</th><th>Сумма</th><th></th></tr>
-            ${t.purchases.map((p) => `<tr><td>${fmtDateTime(p.created_at)}</td><td>${p.rows}</td><td class="mono">${money(p.total, 2)}</td>
-              <td><a class="link-btn" href="/api/traffic/purchases/${p.id}/download">${icon("download")} Скачать</a></td></tr>`).join("")}</table></div>`
-            : App.empty("history", "История покупок пуста", "После покупки здесь появится файл со строками.")}
-        </div>`;
-    },
-    mount(el) {
-      const t = el._data, inp = $("#qty", el);
-      const calc = () => {
-        const n = Math.max(0, parseInt(inp.value, 10) || 0), total = Math.round(n * t.price * 100) / 100;
-        $("#s-rows", el).textContent = n;
-        $("#s-total", el).textContent = money(total, 2);
-        let err = "";
-        if (n > t.available) err = `Столько строк нет в наличии: свободно ${t.available}`;
-        else if (total > t.balance) err = `Недостаточно средств: не хватает ${money(total - t.balance, 2)}`;
-        $("#buy-err", el).innerHTML = err ? `<div class="alert"><span>${esc(err)}</span>${total > t.balance ? `<button class="btn sm" data-topup>${icon("card")}Пополнить баланс</button>` : ""}</div>` : "";
-        $("#buy", el).disabled = !!err || n === 0;
-        $$("[data-topup]", el).forEach((b) => b.onclick = () => topupDialog(t.topup_instructions));
-      };
-      $$("[data-d]", el).forEach((b) => b.onclick = () => { inp.value = Math.max(1, (parseInt(inp.value, 10) || 0) + +b.dataset.d); calc(); });
-      $("#all", el).onclick = () => { inp.value = t.available; calc(); };
-      inp.oninput = calc;
-      $("#buy", el).onclick = async () => {
-        const n = parseInt(inp.value, 10);
-        if (!(await App.confirm(`Купить ${n} строк за ${money(n * t.price, 2)}?`, "Купить"))) return;
-        try { await App.post("/api/traffic/buy", { rows: n }); App.toast("Покупка оформлена"); App.reloadMe(); App.rerender(); }
-        catch (e) { App.fail(e); }
-      };
-      calc();
-    },
-  };
 
   // ================= Партнёрка: офферы =================
   function linkBlock(o, access) {
@@ -412,10 +348,7 @@
       <div class="linkbox">${esc(l.url)}</div>
       <div class="row">
         <button class="btn sm" data-copy="${esc(l.url)}">${icon("copy")}Скопировать ссылку</button>
-        <label class="row gap8 small"><span class="switch"><input type="checkbox" data-form="${l.id}" ${l.form_enabled ? "checked" : ""}><span></span></span>Форма заявки</label>
-        ${l.form_enabled ? `<button class="btn sm ghost" data-copy="${esc(l.form_url)}">${icon("copy")}Ссылка на форму</button>` : ""}
-      </div>
-      <p class="hint">${esc(S().form_note)}</p>`;
+      </div>`;
   }
   function offerCard(o, access, compact) {
     return `<div class="offer ${compact ? "compact" : ""}">
@@ -441,10 +374,6 @@
         App.toast(l.status === "active" ? "Ссылка готова" : "Ссылка запрошена");
         reload();
       } catch (e) { App.fail(e); b.disabled = false; }
-    });
-    $$("[data-form]", el).forEach((c) => c.onchange = async () => {
-      try { await App.patch(`/api/links/${c.dataset.form}`, { form_enabled: c.checked }); App.toast(c.checked ? "Форма включена" : "Форма выключена"); reload(); }
-      catch (e) { App.fail(e); c.checked = !c.checked; }
     });
   }
   const accessBanner = (access) => access ? "" : `
@@ -513,22 +442,18 @@
       const [data, links] = await Promise.all([App.get("/api/offers"), App.get("/api/links")]);
       el._data = data;
       const favs = data.offers.filter((o) => o.favorite);
-      const forms = links.filter((l) => l.form_enabled && l.status === "active");
       const toCatalog = `<br><a class="btn sm mt" href="#/offers">Перейти в каталог</a>`;
       const lStatus = { requested: "Запрошена", active: "Активна", disabled: "Отключена" };
-      el.innerHTML = `${App.pageHead("star", "Избранное и ссылки", "Отмеченные офферы, ваши ссылки и формы заявок. Реальный адрес партнёра скрыт — переходы считаются у нас.")}
+      el.innerHTML = `${App.pageHead("star", "Избранное и ссылки", "Отмеченные офферы и ваши ссылки. Реальный адрес партнёра скрыт — переходы считаются у нас.")}
         ${accessBanner(data.links_access)}
-        <div class="tabs"><button class="tab active" data-tab="fav">Избранное</button><button class="tab" data-tab="links">Мои ссылки</button><button class="tab" data-tab="forms">Формы заявок</button></div>
+        <div class="tabs"><button class="tab active" data-tab="fav">Избранное</button><button class="tab" data-tab="links">Мои ссылки</button></div>
         <div data-pane="fav">${favs.length ? favs.map((o) => offerCard(o, data.links_access)).join("")
           : `<div class="card soft">${App.empty("star", "Избранных офферов пока нет", "Нажмите звезду на карточке оффера в каталоге.", toCatalog)}</div>`}</div>
         <div data-pane="links" hidden>${links.length ? `<div class="table-wrap"><table><tr><th>Оффер</th><th>Статус</th><th>Ссылка</th><th>Переходы</th><th>Заявки</th><th></th></tr>
           ${links.map((l) => `<tr><td>${esc(l.offer_name)}</td><td>${App.badge(lStatus[l.status] || l.status, App.statusTone(l.status))}</td>
             <td class="mono">${esc(l.url || "—")}</td><td>${l.clicks}</td><td>${l.used}${l.limit ? "/" + l.limit : ""}</td>
             <td>${l.url ? `<button class="link-btn" data-copy="${esc(l.url)}">Копировать</button>` : ""}</td></tr>`).join("")}</table></div>`
-          : `<div class="card soft">${App.empty("link", "Ссылок пока нет", "Откройте оффер в каталоге и нажмите «Получить ссылку».", toCatalog)}</div>`}</div>
-        <div data-pane="forms" hidden>${forms.length ? `<div class="table-wrap"><table><tr><th>Оффер</th><th>Адрес формы</th><th></th></tr>
-          ${forms.map((l) => `<tr><td>${esc(l.offer_name)}</td><td class="mono">${esc(l.form_url)}</td><td><button class="link-btn" data-copy="${esc(l.form_url)}">Копировать</button></td></tr>`).join("")}</table></div>`
-          : `<div class="card soft">${App.empty("file", "Все формы выключены", "Включите форму на карточке оффера — клиент сможет сам оставить заявку.")}</div>`}</div>`;
+          : `<div class="card soft">${App.empty("link", "Ссылок пока нет", "Откройте оффер в каталоге и нажмите «Получить ссылку».", toCatalog)}</div>`}</div>`;
     },
     mount(el) { App.tabs(el); bindOffers(el, App.rerender); bindAccess(el); },
   };
@@ -679,7 +604,7 @@
     async render(el) {
       const d = await App.get("/api/income");
       const s = d.summary;
-      const kinds = { topup: "Пополнение", purchase: "Покупка трафика", tariff: "Оплата тарифа", adjust: "Корректировка" };
+      const kinds = { topup: "Пополнение", tariff: "Оплата тарифа", adjust: "Корректировка" };
       el.innerHTML = `${App.pageHead("wallet", "Доходы", "Начисления по заявкам и движение баланса")}
         <div class="grid g3 mb">
           <div class="stat"><div class="lbl">${icon("cash")}Доступно к выводу</div><div class="val accent">${money(s.available)}</div><small>Одобрено партнёром</small></div>
@@ -809,9 +734,12 @@
     feature: "billing",
     crumbs: ["Подписка"],
     async render(el) {
-      const d = await App.get("/api/tariffs");
+      const [d, b] = await Promise.all([App.get("/api/tariffs"), App.get("/api/balance")]);
+      el._data = b;
+      const tStatus = { pending: "На проверке", approved: "Зачислено", rejected: "Отклонено" };
       el.innerHTML = `${App.pageHead("card", "Подписка", "Тарифы и оплата с баланса")}
-        <p class="mb">Баланс: <b>${money(d.balance, 2)}</b>${d.until ? ` · текущий тариф действует до <b>${fmtDate(d.until)}</b>` : ""}</p>
+        <div class="row mb">Баланс: <b>${money(d.balance, 2)}</b>${d.until ? ` · текущий тариф действует до <b>${fmtDate(d.until)}</b>` : ""}
+          <button class="btn ghost sm" data-topup>${icon("card")}Пополнить баланс</button></div>
         <div class="grid g3">${d.tariffs.map((t) => {
           const cur = t.id === d.current;
           return `<div class="card ${cur ? "accent" : ""}">${App.badge(t.name)}
@@ -819,9 +747,13 @@
             <p class="muted">${nl2br(t.description)}</p>${t.rate !== 100 ? `<p class="small">Ставка: ${t.rate}% от базовой</p>` : ""}
             <button class="btn block ${cur ? "" : "primary"}" data-buy="${t.id}" data-name="${esc(t.name)}" data-price="${t.price}" ${cur && !t.price ? "disabled" : ""}>
               ${cur ? (t.price ? "Продлить" : "Текущий тариф") : "Выбрать"}</button></div>`;
-        }).join("")}</div>`;
+        }).join("")}</div>
+        ${b.topups.length ? `<div class="card mt"><div class="card-title">${icon("card")}Заявки на пополнение</div>
+          <div class="table-wrap"><table><tr><th>Дата</th><th>Сумма</th><th>Статус</th><th>Комментарий</th></tr>
+          ${b.topups.map((x) => `<tr><td>${fmtDateTime(x.created_at)}</td><td class="mono">${money(x.amount, 2)}</td><td>${App.badge(tStatus[x.status] || x.status, App.statusTone(x.status === "approved" ? "active" : x.status === "rejected" ? "rejected" : "pending"))}</td><td>${esc(x.admin_note)}</td></tr>`).join("")}</table></div></div>` : ""}`;
     },
     mount(el) {
+      $$("[data-topup]", el).forEach((b) => b.onclick = () => topupDialog(el._data.topup_instructions));
       $$("[data-buy]", el).forEach((b) => b.onclick = async () => {
         const price = +b.dataset.price;
         if (price && !(await App.confirm(`Оплатить тариф ${b.dataset.name} за ${money(price)} с баланса?`, "Оплатить"))) return;
