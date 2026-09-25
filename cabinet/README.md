@@ -45,6 +45,12 @@
 
 ## Локальный запуск
 
+**Windows:** установите Python с python.org (при установке отметьте «Add python.exe to PATH»),
+затем дважды кликните `start.bat` в папке `cabinet`. Кабинет откроется в браузере,
+вход — `admin@site.ru` / `admin12345` (пароль смените в «Сменить пароль»).
+
+**macOS / Linux:**
+
 ```bash
 cd cabinet
 pip install -r requirements-dev.txt
