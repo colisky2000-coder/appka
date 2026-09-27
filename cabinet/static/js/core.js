@@ -229,6 +229,20 @@ window.App = (() => {
       <button class="btn sm" data-p="${meta.page + 1}" ${meta.page >= pages ? "disabled" : ""}>${icon("chev")}</button></div>`;
   };
 
+  // ---------- бренд: название платформы и буквы логотипа (меняются в «Настройках») ----------
+  App.brandInner = (s) => `<span class="logo">${esc(s.logo_text || "")}</span><span class="brand-name">${esc(s.brand_name || "")}</span>`;
+  function applyBrand(s) {
+    document.title = (s.brand_name || "").trim() || "Личный кабинет";
+    const letters = (s.logo_text || "").trim();
+    const fav = $("#favicon");
+    if (!fav || !letters) return;
+    const size = letters.length > 2 ? 11 : letters.length > 1 ? 14 : 18;
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#0071e3"/>` +
+      `<text x="16" y="${16 + size * 0.38}" text-anchor="middle" font-family="Arial,sans-serif" font-weight="700" font-size="${size}" fill="#fff">${esc(letters)}</text></svg>`;
+    fav.href = "data:image/svg+xml," + encodeURIComponent(svg);
+  }
+  App.applyBrand = applyBrand;
+
   // ---------- меню ----------
   // Разделы, которые видит пользователь. Админ в режиме «глазами тарифа» видит разделы этого тарифа.
   try { App.viewTariff = JSON.parse(localStorage.getItem("cab:viewTariff") || "null"); } catch { App.viewTariff = null; }
@@ -295,8 +309,8 @@ window.App = (() => {
 
   function renderShell() {
     const s = App.cfg.settings, me = App.me;
-    document.title = `${s.brand_name} ${s.brand_accent}`.trim() || "Личный кабинет";
-    $("#brand").innerHTML = `<span class="logo">${esc(s.logo_text)}</span><span>${esc(s.brand_name)} <b>${esc(s.brand_accent)}</b></span>`;
+    applyBrand(s);
+    $("#brand").innerHTML = App.brandInner(s);
     $("#burger").innerHTML = icon("menu");
     $("#back").innerHTML = icon("back");
     $("#fab").innerHTML = icon("help");
@@ -359,7 +373,7 @@ window.App = (() => {
 
   // ---------- вход / регистрация ----------
   // Вход — по логину и паролю. Регистрация — только по ссылке-приглашению: код из Telegram-бота, затем логин и пароль.
-  const brandHtml = (s) => `<div class="brand" style="justify-content:center"><span class="logo">${esc(s.logo_text || "")}</span><span>${esc(s.brand_name || "")} <b>${esc(s.brand_accent || "")}</b></span></div>`;
+  const brandHtml = (s) => { applyBrand(s); return `<div class="brand auth-brand">${App.brandInner(s)}</div>`; };
 
   function showAuth(mode = "login", invite = null, notice = "") {
     $("#layout").hidden = true; $("#fab").hidden = true;

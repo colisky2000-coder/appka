@@ -1,3 +1,4 @@
+import html
 import logging
 import os
 
@@ -128,7 +129,9 @@ def create_app(database_url=None):
         # относительные адреса (api/..., static/...) уйдут в корень сайта
         if request.script_root and not request.environ.get("PATH_INFO"):
             return redirect(request.script_root + "/", code=301)
-        return app.response_class(index_html, mimetype="text/html", headers={"Cache-Control": "no-cache"})
+        from . import settings
+        title = html.escape(settings.get("brand_name").strip() or "Личный кабинет")
+        return app.response_class(index_html.replace("__TITLE__", title), mimetype="text/html", headers={"Cache-Control": "no-cache"})
 
     @app.get("/healthz")
     def health():

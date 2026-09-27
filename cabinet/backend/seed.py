@@ -1,7 +1,7 @@
 """Начальные данные: тарифы по умолчанию, пример программы «Интенсив» и (по желанию) демо-контент."""
 import os
 
-from . import features
+from . import features, settings
 from .db import db
 from .models import Article, Invite, Lesson, News, Offer, Program, Setting, Step, StepTask, Tariff, TeamMember
 from .util import new_code
@@ -16,6 +16,7 @@ def seed_defaults():
                       description="Базовый доступ к кабинету", features=features.dump(features.DEFAULT)))
         db.commit()
     migrate_invites()
+    settings.migrate_brand()
     seed_intensive()
 
 

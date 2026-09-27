@@ -38,8 +38,7 @@ def code_hash(token, code):
 
 
 def brand():
-    s = settings.get_all()
-    return f"{s['brand_name']} {s['brand_accent']}".strip() or "Личный кабинет"
+    return settings.get("brand_name").strip() or "Личный кабинет"
 
 
 # ---------- регистрация ----------

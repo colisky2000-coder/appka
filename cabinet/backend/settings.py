@@ -5,9 +5,8 @@ from .models import Setting
 # (ключ, подпись в админке, тип, значение по умолчанию, группа)
 # типы: str, text, bool, money (рубли), url
 SCHEMA = [
-    ("brand_name", "Название (первое слово)", "str", "Моя", "Бренд"),
-    ("brand_accent", "Название (выделенное слово)", "str", "Платформа", "Бренд"),
-    ("logo_text", "Текст логотипа (2–3 буквы)", "str", "МП", "Бренд"),
+    ("brand_name", "Название платформы", "str", "School of Traff", "Бренд"),
+    ("logo_text", "Буквы на логотипе (1–3)", "str", "ST", "Бренд"),
     ("default_links_access", "Новым пользователям сразу открыт доступ к ссылкам", "bool", "0", "Доступ"),
 
     ("dashboard_subtitle", "Подзаголовок главной", "str", "Краткая сводка по основным разделам", "Главная"),
@@ -40,6 +39,7 @@ SCHEMA = [
 ]
 DEFAULTS = {k: d for k, _, _, d, _ in SCHEMA}
 TYPES = {k: t for k, _, t, _, _ in SCHEMA}
+MAX_LEN = {"brand_name": 80, "logo_text": 3}
 
 
 def get_all():
@@ -76,9 +76,31 @@ def update(values: dict):
             except ValueError:
                 continue
         else:
-            v = str(v or "")[:5000]
+            v = str(v or "")
+            v = v.strip()[:MAX_LEN[k]] if k in MAX_LEN else v[:5000]
         s = db.get(Setting, k)
         if s:
             s.value = v
         else:
             db.add(Setting(key=k, value=v))
+
+
+def migrate_brand():
+    """Раньше название задавалось двумя полями (brand_name + выделенное слово brand_accent), знак — «МП».
+    Склеиваем в одно поле; нетронутые старые значения по умолчанию убираем, чтобы действовали новые."""
+    accent = db.get(Setting, "brand_accent")
+    if accent:
+        name = db.get(Setting, "brand_name")
+        full = " ".join(x for x in ((name.value if name else "Моя").strip(), accent.value.strip()) if x)
+        if full == "Моя Платформа":
+            if name:
+                db.delete(name)
+        elif name:
+            name.value = full[:MAX_LEN["brand_name"]]
+        else:
+            db.add(Setting(key="brand_name", value=full[:MAX_LEN["brand_name"]]))
+        db.delete(accent)
+    logo = db.get(Setting, "logo_text")
+    if logo and logo.value == "МП":
+        db.delete(logo)
+    db.commit()

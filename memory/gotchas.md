@@ -13,3 +13,4 @@
 - 2026-09-25 — Класс с `display` перебивает атрибут `hidden` — в styles.css стоит `[hidden] { display: none !important; }`, не убирать.
 - 2026-09-25 — Шорткаты редактора («# », «- », «1. ») через execCommand в Chrome ломают структуру (список внутри абзаца) — сделаны прямой заменой DOM-блока.
 - 2026-09-25 — В контейнере Claude Playwright запускать с `executable_path="/opt/pw-browsers/chromium-1194/chrome-linux/chrome"`; help.sprinthost.ru и другие .ru-сайты недоступны (прокси).
+- 2026-09-27 — В контейнере Claude `pkill -f wsgi.py` убивает и саму команду bash (exit 144): сервер запускать с записью PID (`echo $! > server.pid`) и гасить по нему.

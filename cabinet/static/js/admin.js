@@ -846,8 +846,9 @@
       const items = await App.get("/api/admin/settings");
       el._data = items;
       const groups = [...new Set(items.map((i) => i.group))];
-      el.innerHTML = `${App.pageHead("settings", "Настройки и тексты", "Название, разделы, тексты на страницах, цены")}
+      el.innerHTML = `${App.pageHead("settings", "Настройки и тексты", "Название платформы, логотип, тексты на страницах")}
         <form id="sf">${groups.map((g) => `<div class="card"><div class="card-title">${esc(g)}</div>
+          ${g === "Бренд" ? `<div class="brand brand-preview" id="brand-preview">${App.brandInner(App.cfg.settings)}</div>` : ""}
           ${items.filter((i) => i.group === g).map((i) => {
             if (i.type === "bool") return `<label class="row gap8 mb"><span class="switch"><input type="checkbox" name="${i.key}" ${i.value === "1" ? "checked" : ""}><span></span></span>${esc(i.label)}</label>`;
             if (i.type === "text") return `<div class="field"><label>${esc(i.label)}</label><textarea class="input" name="${i.key}" rows="3">${esc(i.value)}</textarea></div>`;
@@ -858,7 +859,17 @@
     },
     mount(el) {
       const items = el._data;
-      App.onSubmit($("#sf", el), async (_, f) => {
+      const f = $("#sf", el);
+      // Живое превью логотипа и названия
+      const preview = () => { $("#brand-preview", el).innerHTML = App.brandInner({ brand_name: f.elements.brand_name.value, logo_text: f.elements.logo_text.value }); };
+      if (f.elements.brand_name && f.elements.logo_text) {
+        f.elements.logo_text.maxLength = 3;
+        f.elements.logo_text.classList.add("w280");
+        f.elements.brand_name.maxLength = 80;
+        f.elements.brand_name.addEventListener("input", preview);
+        f.elements.logo_text.addEventListener("input", preview);
+      }
+      App.onSubmit(f, async (_, f) => {
         const data = {};
         for (const i of items) data[i.key] = i.type === "bool" ? f.elements[i.key].checked : f.elements[i.key].value;
         await App.put("/api/admin/settings", data);

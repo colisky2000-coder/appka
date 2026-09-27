@@ -364,7 +364,7 @@
         <div class="pay"><b>${money(o.payout)}</b><small>выплата</small></div>
         <button class="star ${o.favorite ? "on" : ""}" data-star="${o.id}" title="${o.favorite ? "Убрать из избранного" : "В избранное"}">${icon("star")}</button>
       </div>
-      <div class="tags">${o.type ? App.badge(o.type.toUpperCase()) : ""}${o.tax_note ? App.badge(o.tax_note, "gray") : ""}</div>
+      <div class="tags">${o.type ? App.badge(o.type, "gray") : ""}${o.tax_note ? App.badge(o.tax_note, "gray") : ""}</div>
       <div class="body">
         ${o.description ? `<details><summary>${icon("chev")}Описание и целевое действие</summary><p>${nl2br(o.description)}</p></details>` : ""}
         <div class="mt">${linkBlock(o, access)}</div>

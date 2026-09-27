@@ -356,6 +356,34 @@ def test_tickets_and_news(app):
     assert other.get(f"/api/tickets/{tid}").status_code == 404
 
 
+def test_brand_name_and_migration(app):
+    from backend import settings
+    from backend.models import Setting
+    admin = login(app, "admin@test.ru", "adminpass123")
+    cfg = admin.get("/api/config").json["data"]["settings"]
+    assert cfg["brand_name"] == "School of Traff" and cfg["logo_text"] == "ST" and "brand_accent" not in cfg
+    assert admin.put("/api/admin/settings", json={"brand_name": "  Новая школа ", "logo_text": "НШКОЛА"}, headers=H).status_code == 200
+    cfg = admin.get("/api/config").json["data"]["settings"]
+    assert cfg["brand_name"] == "Новая школа" and cfg["logo_text"] == "НШК"
+    assert "<title>Новая школа</title>" in admin.get("/").get_data(as_text=True)
+
+    with app.app_context():
+        # Старая база с нетронутыми значениями по умолчанию: «Моя» + «Платформа», знак «МП» — берутся новые
+        for k, v in (("brand_name", "Моя"), ("brand_accent", "Платформа"), ("logo_text", "МП")):
+            db.merge(Setting(key=k, value=v))
+        db.commit()
+        settings.migrate_brand()
+        assert settings.get("brand_name") == "School of Traff" and settings.get("logo_text") == "ST"
+        assert db.get(Setting, "brand_accent") is None
+        # Своё название из двух полей склеивается в одно
+        for k, v in (("brand_name", "Школа"), ("brand_accent", "Трафика"), ("logo_text", "ШТ")):
+            db.merge(Setting(key=k, value=v))
+        db.commit()
+        settings.migrate_brand()
+        assert settings.get("brand_name") == "Школа Трафика" and settings.get("logo_text") == "ШТ"
+        db.remove()
+
+
 def test_settings_and_tariff_features(app):
     admin = login(app, "admin@test.ru", "adminpass123")
     assert admin.put("/api/admin/settings", json={"brand_name": "Тест"}, headers=H).status_code == 200
