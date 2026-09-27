@@ -85,6 +85,7 @@ window.App = (() => {
     link: '<path d="M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"/>',
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
     chev: '<path d="M9 6l6 6-6 6"/>',
+    flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
     back: '<path d="M15 6l-6 6 6 6"/>',
     menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/>',
@@ -230,16 +231,10 @@ window.App = (() => {
   };
 
   // ---------- бренд: название платформы и буквы логотипа (меняются в «Настройках») ----------
-  App.brandInner = (s) => `<span class="logo">${esc(s.logo_text || "")}</span><span class="brand-name">${esc(s.brand_name || "")}</span>`;
+  // Знак — фиолетовый шар (static/img/logo.png), поверх него буквы из настроек (можно оставить пустыми)
+  App.brandInner = (s) => `<span class="logo"><img src="static/img/logo.png" alt=""><b>${esc((s.logo_text || "").trim())}</b></span><span class="brand-name">${esc(s.brand_name || "")}</span>`;
   function applyBrand(s) {
     document.title = (s.brand_name || "").trim() || "Личный кабинет";
-    const letters = (s.logo_text || "").trim();
-    const fav = $("#favicon");
-    if (!fav || !letters) return;
-    const size = letters.length > 2 ? 11 : letters.length > 1 ? 14 : 18;
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#0071e3"/>` +
-      `<text x="16" y="${16 + size * 0.38}" text-anchor="middle" font-family="Arial,sans-serif" font-weight="700" font-size="${size}" fill="#fff">${esc(letters)}</text></svg>`;
-    fav.href = "data:image/svg+xml," + encodeURIComponent(svg);
   }
   App.applyBrand = applyBrand;
 

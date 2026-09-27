@@ -404,8 +404,13 @@ def learn():
     for s in db.query(Step).filter_by(program_id=p.id).order_by(Step.sort, Step.id).all():
         tasks = [{"id": t.id, "text": t.text, "done": t.id in tasks_done} for t in s.tasks]
         done = all(t["done"] for t in tasks) if tasks else s.id in steps_done
+        # Прогресс внутри шага (кольцо вокруг точки): урок, на который ведёт шаг, + задачи
+        units = [t["done"] for t in tasks] or [done]
+        if s.target_type == "lesson" and s.target_id in by_id and tasks:
+            units.append(s.target_id in lessons_done)
+        units_done = len(units) if done else sum(units)
         steps.append({"id": s.id, "title": s.title, "description": s.description, "tasks": tasks, "done": done,
-                      "target": step_target(s, by_id, nums)})
+                      "target": step_target(s, by_id, nums), "units_done": units_done, "units_total": len(units)})
     current = next((s["id"] for s in steps if not s["done"]), None)
     next_lesson = next((l.id for l in lessons if l.id not in lessons_done), None)
     return ok({

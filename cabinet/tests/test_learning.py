@@ -77,9 +77,14 @@ def test_roadmap_progress(app):
     d = s.get("/api/learn").json["data"]
     assert d["steps"][1]["done"] and d["progress"]["steps_done"] == 2
 
-    # Снять отметку
+    # Кольцо прогресса шага: 2 задачи + урок, шаг закрыт задачами -> полное
+    assert (d["steps"][1]["units_done"], d["steps"][1]["units_total"]) == (3, 3)
+    assert (d["steps"][0]["units_done"], d["steps"][0]["units_total"]) == (1, 1)
+
+    # Снять отметку: 1 задача из 2, урок 2 не пройден
     post(s, f"/api/tasks/{lesson['todo'][0]['id']}/done", {"done": False})
-    assert not s.get("/api/learn").json["data"]["steps"][1]["done"]
+    st2 = s.get("/api/learn").json["data"]["steps"][1]
+    assert not st2["done"] and (st2["units_done"], st2["units_total"]) == (1, 3)
 
     # Шаг с задачами нельзя закрыть «целиком»
     assert post(s, f"/api/steps/{second['id']}/done", {"done": True}).status_code == 400

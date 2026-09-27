@@ -82,9 +82,12 @@ h1, h2, .display { font-family: var(--font-display); font-weight: 600; font-synt
 
 .brand { display: flex; align-items: center; gap: 12px; padding: 2px 8px 22px; font-family: var(--font-display); font-size: 13px; font-weight: 600; font-synthesis: none; line-height: 1.25; letter-spacing: -0.01em; color: var(--text); min-width: 0; }
 .brand-name { min-width: 0; overflow-wrap: anywhere; }
-.logo { width: 36px; height: 36px; border-radius: 10px; background: var(--accent); color: #fff; display: grid; place-items: center; font-family: var(--font-display); font-size: 12px; letter-spacing: 0; flex: none; }
+/* Знак: мягкий фиолетовый шар, буквы — белые по центру его плотной части */
+.logo { position: relative; width: 40px; height: 40px; display: grid; place-items: center; color: #fff; font-family: var(--font-display); font-size: 11px; letter-spacing: 0; flex: none; }
+.logo img { position: absolute; inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px); pointer-events: none; }
+.logo b { position: relative; font-weight: 600; transform: translateY(2px); text-shadow: 0 0 6px rgba(80, 60, 220, .35); }
 .auth-brand { justify-content: center; padding: 0 0 18px; font-size: 15px; }
-.auth-brand .logo { width: 44px; height: 44px; border-radius: 12px; font-size: 14px; }
+.auth-brand .logo { width: 52px; height: 52px; font-size: 14px; }
 .brand-preview { padding: 16px 18px; margin-bottom: 18px; background: var(--bg); border-radius: var(--radius-md); font-size: 15px; }
 
 .nav { flex: 1; overflow-y: auto; }
@@ -523,27 +526,72 @@ tr.clickable:hover td { background: var(--frost); }
 .progress.lg { height: 6px; border-radius: 6px; margin: 22px 0 10px; max-width: 640px; }
 .done-banner { display: flex; gap: 12px; align-items: center; color: var(--ok); font-weight: 600; max-width: 320px; }
 .done-banner svg { width: 28px; height: 28px; flex: none; }
-.roadmap-card { padding: 16px 8px; }
-.roadmap { overflow-x: auto; padding: 16px 12px 8px; scroll-behavior: smooth; }
-.rm-track { display: flex; min-width: max-content; }
-.rm-point { position: relative; width: 150px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 0 8px 6px; text-align: center; }
-.rm-point::before { content: ""; position: absolute; top: 19px; right: 50%; width: 100%; height: 2px; background: var(--line-strong); z-index: 0; }
-.rm-point:first-child::before { display: none; }
-.rm-point.done::before, .rm-point.current::before { background: var(--accent); }
-.rm-point .dot { position: relative; z-index: 1; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--bg); border: 2px solid var(--line-strong); color: var(--muted); font-weight: 600; font-size: 14px; transition: transform .2s; }
-.rm-point .dot svg { width: 18px; height: 18px; }
-.rm-point.done .dot { background: var(--accent); border-color: var(--accent); color: #fff; }
-.rm-point.current .dot { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0 5px var(--accent-soft); animation: pulse 2.4s infinite; }
-.rm-point.sel .dot { transform: scale(1.12); }
-.rm-point.sel .rm-label { color: var(--text); font-weight: 600; }
-.rm-point:hover .dot { transform: scale(1.08); }
-.rm-label { font-size: 13.5px; color: var(--muted); line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 4px var(--accent-soft); } 50% { box-shadow: 0 0 0 9px var(--accent-soft); } }
-.step-panel { padding: 32px; }
-.step-panel h2 { margin: 14px 0 10px; font-size: 28px; line-height: 1.14; }
-.step-panel .prose { font-size: 17px; }
-.step-panel .btn.accent-o { margin: 14px 0 6px; max-width: 100%; white-space: normal; text-align: left; }
-.step-nav { margin-top: 20px; border-top: 1px solid var(--line-strong); padding-top: 16px; }
+/* ---------- Роадмап: вертикальный маршрут ----------
+   Исключение из «без градиентов и теней»: пройденная часть линии — светящийся синий градиент. */
+.rm2 { position: relative; display: flex; flex-direction: column; gap: 14px; --node: 48px; --gut: 72px; }
+.rm-line { position: absolute; left: calc(var(--gut) / 2 - 1.5px); width: 3px; z-index: 0;
+  background: repeating-linear-gradient(to bottom, var(--line-strong) 0 6px, transparent 6px 12px); }
+.rm-fill { position: absolute; left: 0; top: 0; width: 3px; height: 0; border-radius: 3px;
+  background: linear-gradient(to bottom, #5ac8fa, var(--accent) 55%, #5e5ce6); transition: height 1.4s cubic-bezier(.22, .8, .2, 1); }
+.rm-fill::after { content: ""; position: absolute; left: 50%; bottom: -10px; width: 22px; height: 22px; margin-left: -11px; border-radius: 50%;
+  background: radial-gradient(circle, rgba(94, 92, 230, .55), rgba(0, 113, 227, 0) 70%); filter: blur(2px); }
+.rm-item { position: relative; display: grid; grid-template-columns: var(--gut) minmax(0, 1fr); align-items: start; z-index: 1; }
+.rm-node { position: relative; width: var(--node); height: var(--node); margin: 8px auto 0; display: grid; place-items: center; border-radius: 50%; background: var(--bg); color: var(--muted); font-weight: 600; font-size: 15px; }
+.rm-node > svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.rm-ring-bg { fill: none; stroke: var(--line-strong); stroke-width: 3; }
+.rm-ring { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 1.2s .5s cubic-bezier(.22, .8, .2, 1); }
+.rm-num { position: relative; display: grid; place-items: center; }
+.rm-num svg { width: 20px; height: 20px; stroke-width: 2.6; }
+.rm-item.done .rm-node { background: var(--accent); color: #fff; }
+.rm-item.done .rm-ring-bg { stroke: var(--accent); }
+.rm-item.future .rm-ring-bg { stroke-dasharray: 3 4; }
+.rm-item.future .rm-node, .rm-item.future .rm-head b { color: var(--steel); }
+/* текущий шаг: кольцо с прогрессом, пин «Вы здесь» и мягкая пульсация */
+.rm-item.current .rm-node { width: 56px; height: 56px; margin-top: 40px; color: var(--accent); font-size: 17px; }
+.rm-item.current .rm-node::before { content: ""; position: absolute; inset: 0; border-radius: 50%; background: var(--accent); opacity: .18; animation: rm-pulse 2.4s ease-out infinite; z-index: -1; }
+.rm-pin { position: absolute; left: 50%; bottom: calc(100% - 4px); width: 26px; height: 34px; margin-left: -13px; animation: rm-drop .6s .9s both cubic-bezier(.3, 1.5, .5, 1); }
+.rm-pin svg { width: 100%; height: 100%; }
+.rm-pin path { fill: var(--accent); }
+.rm-pin circle { fill: #fff; }
+@keyframes rm-pulse { 0% { transform: scale(1); opacity: .28; } 100% { transform: scale(1.9); opacity: 0; } }
+@keyframes rm-drop { from { transform: translateY(-14px); opacity: 0; } to { transform: none; opacity: 1; } }
+/* карточки: текущая крупная, остальные компактные */
+.rm-card { background: var(--bg-soft); border-radius: var(--radius-md); min-width: 0; }
+.rm-item.future .rm-card { background: var(--frost); }
+.rm-head { width: 100%; display: flex; align-items: center; gap: 12px; padding: 18px 22px; text-align: left; border-radius: var(--radius-md); }
+.rm-head b { display: block; font-weight: 600; font-size: 16px; }
+.rm-head small { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+.rm-item.done .rm-head small { color: var(--ok); }
+.rm-head > svg { margin-left: auto; color: var(--steel); transition: transform .3s; }
+.rm-item.open .rm-head > svg { transform: rotate(90deg); }
+.rm-more { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .35s ease; }
+.rm-more > div { overflow: hidden; }
+.rm-item.open .rm-more { grid-template-rows: 1fr; }
+.rm-more-in { padding: 0 22px 20px; }
+.rm-more-in .prose { font-size: 15px; }
+.rm-more-in .tasks { margin-top: 12px; }
+.rm-card.big { background: var(--bg-soft); border-radius: var(--radius); padding: 30px 32px; margin-top: 24px; }
+.rm-card.big h2 { margin: 8px 0 18px; font-size: 28px; line-height: 1.14; }
+.rm-card.big .prose { font-size: 17px; margin-top: 16px; }
+.rm-card .btn.accent-o { margin-top: 12px; max-width: 100%; white-space: normal; text-align: left; }
+.rm-here { color: var(--launch); font-size: 13px; font-weight: 600; }
+.rm-lesson { display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: 22px; align-items: center; padding: 14px; background: var(--bg); border-radius: var(--radius-md); }
+.rm-lesson .cover-wrap { position: relative; border-radius: 14px; overflow: hidden; aspect-ratio: 16 / 9; }
+.rm-lesson .cover-wrap .cover { width: 100%; height: 100%; }
+.rm-lesson h3 { margin: 2px 0 6px; font-size: 19px; line-height: 1.21; }
+.rm-lesson time { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 14px; margin-bottom: 14px; }
+.rm-lesson:hover .btn.primary { background: var(--accent-hover); }
+/* финиш */
+.rm-item.finish .rm-node { color: var(--steel); border: 3px dashed var(--line-strong); }
+.rm-item.finish .rm-node svg.i { width: 22px; height: 22px; }
+.rm-item.finish .rm-card { background: none; padding: 20px 0 0 4px; }
+.rm-item.finish .rm-card b { font-family: var(--font-display); font-weight: 600; font-size: 19px; }
+.rm-item.finish .rm-card small { display: block; color: var(--muted); margin-top: 4px; }
+.rm-item.finish.reached .rm-node { border: 0; background: var(--accent); color: #fff; }
+@media (prefers-reduced-motion: reduce) {
+  .rm-fill, .rm-ring, .rm-more { transition: none; }
+  .rm-item.current .rm-node::before, .rm-pin { animation: none; }
+}
 
 /* ---------- Задачи-галочки ---------- */
 .tasks { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
@@ -583,14 +631,13 @@ svg.big { width: 44px; height: 44px; }
   .learn-hero p.muted { font-size: 17px; }
   .hero-cta, .hero-cta .btn { width: 100%; justify-content: center; }
   .hero-cta .btn { white-space: normal; }
-  /* На телефоне роадмап вертикальный */
-  .roadmap { overflow-x: visible; padding: 8px 12px; }
-  .rm-track { flex-direction: column; min-width: 0; }
-  .rm-point { width: auto; flex-direction: row; text-align: left; gap: 14px; padding: 6px 0; }
-  .rm-point::before { top: auto; bottom: 50%; right: auto; left: 19px; width: 2px; height: 100%; }
-  .rm-label { font-size: 14px; -webkit-line-clamp: 2; }
-  .step-panel { padding: 22px 20px; }
-  .step-panel h2 { font-size: 22px; }
+  .rm2 { --gut: 52px; --node: 40px; }
+  .rm-item.current .rm-node { width: 46px; height: 46px; }
+  .rm-card.big { padding: 22px 18px; }
+  .rm-card.big h2 { font-size: 22px; }
+  .rm-lesson { grid-template-columns: 1fr; gap: 12px; }
+  .rm-head { padding: 16px 16px; }
+  .rm-more-in { padding: 0 16px 16px; }
   .cover-thumb { width: 110px; }
   .preview-bar { padding: 8px 16px; }
   .media-grid { grid-template-columns: 1fr; }

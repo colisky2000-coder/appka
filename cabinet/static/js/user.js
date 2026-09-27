@@ -153,82 +153,131 @@
   const targetLabel = (t) => !t ? "" : t.type === "lesson" ? `Открыть: ${t.title}` : t.type === "url" ? "Перейти по ссылке" : `Открыть: ${t.title}`;
   const taskHtml = (attr, id, text, done) => `<label class="task ${done ? "done" : ""}">
     <input type="checkbox" ${attr}="${id}" ${done ? "checked" : ""}><span class="box">${icon("check")}</span><span class="tt">${esc(text)}</span></label>`;
-  let selectedStep = null; // выбранная точка роадмапа
+  // Роадмап: вертикальная линия с точками-кольцами. Раскрытые шаги держатся между перерисовками.
+  let openSteps = new Set();
+  const ring = (s, i, isCur) => {
+    const r = 21, c = 2 * Math.PI * r, part = s.units_total ? s.units_done / s.units_total : 0;
+    return `<span class="rm-node">
+      <svg viewBox="0 0 48 48" aria-hidden="true"><circle class="rm-ring-bg" cx="24" cy="24" r="${r}"/>
+        ${!s.done && part > 0 ? `<circle class="rm-ring" cx="24" cy="24" r="${r}" stroke-dasharray="${c}" stroke-dashoffset="${c}" data-off="${c * (1 - part)}"/>` : ""}</svg>
+      <span class="rm-num">${s.done ? icon("check") : i + 1}</span>
+      ${isCur ? `<span class="rm-pin" aria-hidden="true"><svg viewBox="0 0 24 32"><path d="M12 31s10-11.2 10-19A10 10 0 0 0 2 12c0 7.8 10 19 10 19z"/><circle cx="12" cy="12" r="4"/></svg></span>` : ""}
+    </span>`;
+  };
 
   P.learn = {
     feature: "learning",
     crumbs: ["Обучение", "Роадмап"],
     async render(el) { el._data = await App.get(withProgram("/api/learn")); },
     mount(el) {
-      let d = el._data;
-      // При открытии роадмапа выделяем текущий шаг; дальше выбор держится между перерисовками
-      selectedStep = d.current_step_id || d.steps[d.steps.length - 1]?.id || null;
+      let d = el._data, first = true, ro = null;
+      openSteps = new Set();
       const reload = async () => { try { d = await App.get(withProgram("/api/learn")); draw(); } catch (e) { App.fail(e); } };
+      const lessonOf = (s) => s.target?.type === "lesson" ? d.lessons.find((l) => l.id === s.target.id) : null;
+      const stepBody = (s) => `
+        ${s.description ? `<div class="prose muted">${md(s.description)}</div>` : ""}
+        ${s.target && !(s.id === d.current_step_id && lessonOf(s)) ? `<button class="btn accent-o sm" data-open="${s.id}">${icon("arrow")}${esc(targetLabel(s.target))}</button>` : ""}
+        <div class="tasks">${s.tasks.length ? s.tasks.map((t) => taskHtml("data-task", t.id, t.text, t.done)).join("")
+          : s.target?.type === "lesson" ? `<p class="hint m0">Шаг отметится сам, когда вы нажмёте «Урок пройден» в уроке.</p>${taskHtml("data-stepdone", s.id, "Шаг выполнен", s.done)}`
+          : taskHtml("data-stepdone", s.id, "Шаг выполнен", s.done)}</div>`;
       const draw = () => {
         const pr = d.progress, pct = pr.steps_total ? Math.round((pr.steps_done / pr.steps_total) * 100) : 0;
         const cur = d.steps.find((s) => s.id === d.current_step_id);
         const allDone = pr.steps_total > 0 && !cur;
-        let cont = "";
-        if (cur) cont = `<button class="btn primary lg" id="continue">${icon("play")}Продолжить: ${esc(cur.target && cur.target.type === "lesson" ? cur.target.title : cur.title)}</button>`;
-        else if (!pr.steps_total && d.next_lesson_id) cont = `<a class="btn primary lg" href="#/lesson/${d.next_lesson_id}">${icon("play")}Начать обучение</a>`;
-        const idx = d.steps.findIndex((s) => s.id === selectedStep);
-        const st = d.steps[idx];
+        const finish = (S().learn_finish_text || "").trim();
+        const card = (s, i) => {
+          const isCur = s.id === d.current_step_id, state = s.done ? "done" : isCur ? "current" : "future";
+          const meta = s.done ? "Выполнен" : s.units_total > 1 ? `${s.units_done} из ${s.units_total}` : "";
+          if (isCur) {
+            const l = lessonOf(s);
+            return `<div class="rm-item current" data-id="${s.id}">${ring(s, i, true)}
+              <div class="rm-card big">
+                <div class="rm-here">Вы здесь · шаг ${i + 1} из ${d.steps.length}${meta ? ` · ${meta}` : ""}</div>
+                <h2>${esc(s.title)}</h2>
+                ${l ? `<a class="rm-lesson" href="#/lesson/${l.id}">
+                  <div class="cover-wrap">${cover(l.cover, l.title)}${l.has_video ? `<span class="play-badge">${icon("play")}</span>` : ""}</div>
+                  <div class="minw0"><div class="hint">Урок ${l.num}</div><h3>${esc(l.title)}</h3>
+                    ${l.duration ? `<time>${icon("clock")}${esc(l.duration)}</time>` : ""}
+                    <span class="btn primary">${icon("play")}${l.done ? "Открыть урок" : "Продолжить"}</span></div></a>`
+                  : s.target ? `<button class="btn primary" data-open="${s.id}">${icon("play")}Продолжить</button>` : ""}
+                ${stepBody(s)}
+              </div></div>`;
+          }
+          const open = openSteps.has(s.id);
+          return `<div class="rm-item ${state} ${open ? "open" : ""}" data-id="${s.id}">${ring(s, i, false)}
+            <div class="rm-card">
+              <button class="rm-head" data-toggle="${s.id}" aria-expanded="${open}"><span class="minw0"><b>${esc(s.title)}</b>${meta ? `<small>${meta}</small>` : ""}</span>${icon("chev")}</button>
+              <div class="rm-more"><div><div class="rm-more-in">${stepBody(s)}</div></div></div>
+            </div></div>`;
+        };
         el.innerHTML = `
           <div class="learn-hero">
             <div class="flex1 minw0"><div class="hint caps">${esc(S().learn_title || "Обучение")}</div><h1>${esc(d.program.title)}</h1>
               ${d.program.description ? `<p class="muted m0">${esc(d.program.description)}</p>` : ""}
               <div class="progress lg mt"><div style="width:${pct}%"></div></div>
               <div class="hint">Пройдено ${pr.steps_done} из ${pr.steps_total} шагов · уроков ${pr.lessons_done} из ${pr.lessons_total}</div></div>
-            <div class="hero-cta">${allDone ? `<div class="done-banner">${icon("trophy")}<span>${esc(S().learn_done_text)}</span></div>` : cont}</div>
+            <div class="hero-cta">${allDone ? `<div class="done-banner">${icon("trophy")}<span>${esc(S().learn_done_text)}</span></div>`
+              : !pr.steps_total && d.next_lesson_id ? `<a class="btn primary lg" href="#/lesson/${d.next_lesson_id}">${icon("play")}Начать обучение</a>` : ""}</div>
           </div>
           ${d.steps.length ? `
-          <div class="card roadmap-card"><div class="roadmap" id="rm"><div class="rm-track">
-            ${d.steps.map((s, i) => `<button class="rm-point ${s.done ? "done" : ""} ${s.id === d.current_step_id ? "current" : ""} ${s.id === selectedStep ? "sel" : ""}" data-step="${s.id}">
-              <span class="dot">${s.done ? icon("check") : i + 1}</span><span class="rm-label">${esc(s.title)}</span></button>`).join("")}
-          </div></div></div>
-          ${st ? `<div class="card step-panel">
-            <div class="row">${App.badge(`Шаг ${idx + 1} из ${d.steps.length}`, "gray")}${st.done ? App.badge("Выполнен", "ok") : st.id === d.current_step_id ? App.badge("Сейчас") : ""}</div>
-            <h2>${esc(st.title)}</h2>
-            ${st.description ? `<div class="prose muted">${md(st.description)}</div>` : ""}
-            ${st.target ? `<button class="btn accent-o" id="open-target">${icon("arrow")}${esc(targetLabel(st.target))}</button>` : ""}
-            <div class="tasks">${st.tasks.length ? st.tasks.map((t) => taskHtml("data-task", t.id, t.text, t.done)).join("")
-              : st.target?.type === "lesson" ? `<p class="hint">Шаг отметится сам, когда вы нажмёте «Урок пройден» в уроке.</p>${taskHtml("data-stepdone", st.id, "Шаг выполнен", st.done)}`
-              : taskHtml("data-stepdone", st.id, "Шаг выполнен", st.done)}</div>
-            <div class="row step-nav">
-              <button class="btn sm ghost" id="prev-step" ${idx <= 0 ? "disabled" : ""}>${icon("back")}Назад</button><span class="spacer"></span>
-              <button class="btn sm" id="next-step" ${idx >= d.steps.length - 1 ? "disabled" : ""}>Следующий шаг${icon("chev")}</button></div>
-          </div>` : ""}`
+          <div class="rm2 ${first ? "intro" : ""}" id="rm">
+            <div class="rm-line"><i class="rm-fill"></i></div>
+            ${d.steps.map(card).join("")}
+            <div class="rm-item finish ${allDone ? "reached" : ""}"><span class="rm-node">${icon("flag")}</span>
+              <div class="rm-card"><b>${esc(finish || "Финиш")}</b>${allDone ? `<small>${esc(S().learn_done_text || "")}</small>` : ""}</div></div>
+          </div>`
           : `<div class="card soft">${App.empty("target", "Роадмап пока пуст", "Шаги появятся, когда их добавят в программу.")}</div>`}`;
-        // прокрутить линию к выбранной точке
-        const selEl = $(".rm-point.sel", el);
-        if (selEl) { const rm = $("#rm", el); rm.scrollLeft = selEl.offsetLeft - rm.clientWidth / 2 + selEl.clientWidth / 2; }
-        $$("[data-step]", el).forEach((b) => b.onclick = () => { selectedStep = +b.dataset.step; draw(); });
-        $("#prev-step", el)?.addEventListener("click", () => { selectedStep = d.steps[idx - 1].id; draw(); });
-        $("#next-step", el)?.addEventListener("click", () => { selectedStep = d.steps[idx + 1].id; draw(); });
-        $("#open-target", el)?.addEventListener("click", () => openTarget(st.target));
-        $("#continue", el)?.addEventListener("click", () => {
-          if (cur.target) openTarget(cur.target); else { selectedStep = cur.id; draw(); $(".step-panel", el)?.scrollIntoView({ behavior: "smooth" }); }
+
+        // Линия: синий участок до текущей точки (или до финиша), дальше — серый пунктир
+        const rm = $("#rm", el);
+        if (rm) {
+          const fill = $(".rm-fill", rm), line = $(".rm-line", rm);
+          const place = () => {
+            const base = rm.getBoundingClientRect().top;
+            const mid = (n) => { const r = n.getBoundingClientRect(); return r.top + r.height / 2 - base; };
+            const nodes = $$(".rm-node", rm), last = nodes[nodes.length - 1], top = mid(nodes[0]);
+            const stop = $(".rm-item.current .rm-node", rm) || (allDone ? last : nodes[0]);
+            line.style.top = top + "px"; line.style.height = (mid(last) - top) + "px";
+            return mid(stop) - top;
+          };
+          const h = place();
+          if (first) {
+            fill.style.height = "0px";
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              fill.style.height = h + "px";
+              $$(".rm-ring", rm).forEach((c) => { c.style.strokeDashoffset = c.dataset.off; });
+            }));
+          } else {
+            fill.style.height = h + "px";
+            $$(".rm-ring", rm).forEach((c) => { c.style.strokeDashoffset = c.dataset.off; });
+          }
+          // раскрытие шагов меняет высоту — линия подстраивается
+          ro?.disconnect();
+          ro = new ResizeObserver(() => { if (rm.isConnected) fill.style.height = place() + "px"; });
+          ro.observe(rm);
+          if (first) $(".rm-item.current", rm)?.scrollIntoView({ block: "center", behavior: "smooth" });
+        }
+        first = false;
+
+        $$("[data-toggle]", el).forEach((b) => b.onclick = () => {
+          const id = +b.dataset.toggle, item = b.closest(".rm-item"), open = !openSteps.has(id);
+          open ? openSteps.add(id) : openSteps.delete(id);
+          item.classList.toggle("open", open); b.setAttribute("aria-expanded", open);
         });
-        const toggle = async (url, checked, wasDone) => {
+        $$("[data-open]", el).forEach((b) => b.onclick = () => openTarget(d.steps.find((s) => s.id === +b.dataset.open)?.target));
+        const toggle = async (url, checked, st) => {
           try {
             await App.post(url, { done: checked });
             const before = st.done;
             await reload();
-            const now = d.steps.find((x) => x.id === st.id);
-            if (!before && now?.done) {
-              App.toast("Шаг выполнен");
-              const next = d.steps.find((x) => !x.done);
-              if (next) setTimeout(() => { selectedStep = next.id; draw(); }, 700);
-            }
+            if (!before && d.steps.find((x) => x.id === st.id)?.done) App.toast("Шаг выполнен");
           } catch (e) { App.fail(e); draw(); }
         };
-        $$("[data-task]", el).forEach((c) => c.onchange = () => { c.closest(".task").classList.toggle("done", c.checked); toggle(`/api/tasks/${c.dataset.task}/done`, c.checked); });
+        const stepOf = (c) => d.steps.find((s) => s.id === +c.closest(".rm-item").dataset.id);
+        $$("[data-task]", el).forEach((c) => c.onchange = () => { c.closest(".task").classList.toggle("done", c.checked); toggle(`/api/tasks/${c.dataset.task}/done`, c.checked, stepOf(c)); });
         $$("[data-stepdone]", el).forEach((c) => c.onchange = () => {
-          if (st.target?.type === "lesson") {
-            const lesson = d.lessons.find((l) => l.id === st.target.id);
-            return toggle(`/api/lessons/${st.target.id}/done`, c.checked, lesson?.done);
-          }
-          toggle(`/api/steps/${st.id}/done`, c.checked);
+          const st = stepOf(c);
+          toggle(st.target?.type === "lesson" ? `/api/lessons/${st.target.id}/done` : `/api/steps/${st.id}/done`, c.checked, st);
         });
       };
       draw();
