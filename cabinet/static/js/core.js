@@ -17,7 +17,7 @@ window.App = (() => {
     if (res.status === 401 && !url.startsWith("api/auth/")) {
       App.me = null; showAuth(); throw new Error(json.error || "Требуется вход");
     }
-    if (!res.ok || json.ok === false) throw new Error(json.error || `Ошибка ${res.status}`);
+    if (!res.ok || json.ok === false) { const err = new Error(json.error || `Ошибка ${res.status}`); err.status = res.status; throw err; }
     return json.meta ? { data: json.data, meta: json.meta } : json.data;
   }
   App.api = api;
@@ -86,6 +86,9 @@ window.App = (() => {
     lock: '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>',
     chev: '<path d="M9 6l6 6-6 6"/>',
     flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
+    alignl: '<rect x="3" y="5" width="8" height="8" rx="1"/><path d="M14 6h7M14 10h7M3 17h18M3 20h12"/>',
+    alignc: '<rect x="7" y="4" width="10" height="9" rx="1"/><path d="M3 17h18M6 20h12"/>',
+    alignr: '<rect x="13" y="5" width="8" height="8" rx="1"/><path d="M3 6h7M3 10h7M3 17h18M9 20h12"/>',
     back: '<path d="M15 6l-6 6 6 6"/>',
     menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
     user: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/>',
@@ -315,11 +318,13 @@ window.App = (() => {
       <div class="me"><span class="avatar">${esc(initial(me.name))}</span><div>${esc(me.name)}<small>${me.role === "admin" ? "Администратор" : "Пользователь"}</small></div></div>
       <a class="nav-item" data-route="profile" href="#/profile">${icon("user")}Профиль</a>
       ${App.can("income") ? `<a class="nav-item" data-route="income" href="#/income">${icon("wallet")}Доходы</a>` : ""}
-      <a class="nav-item" data-route="password" href="#/password">${icon("key")}Сменить пароль</a>
+      ${me.role === "admin" ? `<a class="nav-item" data-route="password" href="#/password">${icon("key")}Сменить пароль</a>` : ""}
       <button class="nav-item" id="logout">${icon("logout")}Выйти</button>`;
     $("#logout").onclick = async () => { try { await App.post("/api/auth/logout"); } catch { /* ignore */ } App.me = null; location.hash = ""; showAuth(); };
     $("#brand").href = "#/" + App.home();
-    $("#fab").hidden = !App.can("support");
+    const help = (s.support_url || "").trim();
+    $("#fab").hidden = !help;
+    if (help) $("#fab").href = help;
     $("#preview-bar").hidden = !(isAdmin() && App.viewTariff);
     $("#preview-bar").innerHTML = App.viewTariff ? `${icon("user")}<span>Вы смотрите сайт глазами тарифа <b>«${esc(App.viewTariff.name)}»</b></span>
       <button class="btn sm" id="preview-exit">Выйти из просмотра</button>` : "";
@@ -366,92 +371,104 @@ window.App = (() => {
   App.rerender = render;
   App.route = route;
 
-  // ---------- вход / регистрация ----------
-  // Вход — по логину и паролю. Регистрация — только по ссылке-приглашению: код из Telegram-бота, затем логин и пароль.
+  // ---------- вход ----------
+  // Вход — через Telegram: кнопка открывает бота, бот присылает код, человек вводит его здесь.
+  // Новичку код придёт только по ссылке-приглашению — с её тарифом. Вход по паролю — запасной, для администратора.
   const brandHtml = (s) => { applyBrand(s); return `<div class="brand auth-brand">${App.brandInner(s)}</div>`; };
+  let authTimer = null;
+  const stopAuthPoll = () => { clearTimeout(authTimer); authTimer = null; };
 
   function showAuth(mode = "login", invite = null, notice = "") {
+    stopAuthPoll();
     $("#layout").hidden = true; $("#fab").hidden = true;
     const s = App.cfg?.settings || {};
     const el = $("#auth");
     el.hidden = false;
-    if (mode === "register" && invite) return showRegister(el, s, invite);
-    el.innerHTML = `<div class="auth-wrap"><form class="card auth-card" id="auth-form">${brandHtml(s)}
-      ${notice ? `<div class="notice">${icon("warn")}<div>${esc(notice)}</div></div>` : ""}
-      ${invite ? `<div class="notice">${icon("gift")}<div>Приглашение в <b>«${esc(invite.tariff)}»</b>. Войдите, чтобы активировать доступ.</div></div>` : ""}
-      <h2>Вход в кабинет</h2>
-      <div class="field"><label>Логин</label><input class="input" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
-      <div class="field"><label>Пароль</label><input class="input" name="password" type="password" autocomplete="current-password" required></div>
-      <div class="form-error"></div>
-      <button class="btn primary block" type="submit">Войти</button>
-      ${invite ? `<p class="hint center">Ещё нет аккаунта? <a href="#" class="link-btn" id="auth-switch">Зарегистрироваться</a></p>`
-        : `<p class="hint center">Регистрация — только по ссылке-приглашению от администратора.</p>`}
-      <p class="hint center m0">Забыли пароль? Напишите администратору — он задаст новый.</p>
-    </form></div>`;
-    $("#auth-switch")?.addEventListener("click", (e) => { e.preventDefault(); showAuth("register", invite); });
-    App.onSubmit($("#auth-form"), async (d) => {
-      App.me = await App.post("/api/auth/login", d);
-      if (invite) location.hash = `#/join/${invite.code}`;
-      await boot();
-    });
-  }
-  App.showAuth = showAuth;
-
-  function showRegister(el, s, invite) {
-    const st = { token: "", url: "", verified: false, login: "", error: "" };
-    const days = invite.days ? ` Доступ на ${invite.days} дн.` : "";
+    const hasBot = !!App.cfg?.telegram_bot;
+    const st = { token: "", url: "", step: "start", sent: false, error: "", password: mode === "password" || !hasBot };
+    const inviteNote = invite ? `<div class="notice">${icon("gift")}<div>Приглашение в <b>«${esc(invite.tariff)}»</b>.${invite.days ? ` Доступ на ${invite.days} дн.` : ""}
+      Войдите через Telegram — доступ подключится сам.</div></div>` : "";
     const draw = () => {
-      const step = (n, done, title, body) => `<div class="auth-step ${done ? "done" : ""}"><span class="n">${done ? icon("check") : n}</span>
-        <div class="t"><b>${title}</b>${body ? `<div class="mt8">${body}</div>` : ""}</div></div>`;
-      const s1 = st.url
-        ? `<a class="btn primary block" href="${esc(st.url)}" target="_blank" rel="noopener" id="open-bot">${icon("send")}Получить код в Telegram</a>
-           <p class="hint m0 mt8">Откроется бот — нажмите «Запустить» (Start), он пришлёт код.</p>`
-        : st.error ? `<div class="form-error" style="display:block">${esc(st.error)}</div>` : App.loading();
-      const s2 = `<form id="code-form"><div class="row"><input class="input code-input flex1" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" placeholder="000000" required>
-          <button class="btn" type="submit">Подтвердить</button></div><div class="form-error"></div>
-          <p class="hint m0 mt8">Код не пришёл или устарел? <a href="#" class="link-btn" id="new-code">Получить новый</a></p></form>`;
-      const s3 = `<form id="reg-form">
-          <div class="field"><label>Логин</label><input class="input" name="login" value="${esc(st.login)}" autocomplete="username" autocapitalize="none" spellcheck="false" required placeholder="латиница, цифры, _ . -">
-            <span class="hint">По нему вы будете входить в кабинет</span></div>
-          <div class="field"><label>Пароль</label><input class="input" name="password" type="password" minlength="8" autocomplete="new-password" required placeholder="Минимум 8 символов"></div>
-          <div class="field"><label>Повторите пароль</label><input class="input" name="password2" type="password" autocomplete="new-password" required></div>
+      let tg;
+      if (!st.url && !st.error) tg = App.loading();
+      else if (st.step === "start") tg = `${st.error ? `<div class="form-error" style="display:block">${esc(st.error)}</div>` : ""}
+        ${st.url ? `<a class="btn primary block tg-btn" href="${esc(st.url)}" target="_blank" rel="noopener" id="tg-open">${icon("send")}Войти через Telegram</a>
+          <p class="hint center">Откроется бот — нажмите «Запустить» (Start), он пришлёт код.</p>`
+          : `<button class="btn primary block" id="tg-retry">Попробовать ещё раз</button>`}`;
+      else tg = `<form id="code-form">
+          <div class="tg-status ${st.error ? "bad" : st.sent ? "ok" : ""}">${st.error ? icon("warn") + esc(st.error)
+            : st.sent ? icon("check") + "Код отправлен вам в Telegram" : icon("send") + "Откройте бота и нажмите «Запустить» — он пришлёт код"}</div>
+          <div class="field"><label>Код из Telegram</label><input class="input code-input" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" required></div>
           <div class="form-error"></div>
-          <button class="btn primary block" type="submit">Зарегистрироваться</button></form>`;
+          <button class="btn primary block" type="submit">Войти</button>
+          <p class="hint center m0 mt8"><a class="link-btn" href="${esc(st.url)}" target="_blank" rel="noopener">Открыть бота ещё раз</a> ·
+            <a href="#" class="link-btn" id="tg-new">Получить новый код</a></p></form>`;
+      const pw = `<form id="auth-form">
+          <div class="field"><label>Логин</label><input class="input" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" required></div>
+          <div class="field"><label>Пароль</label><input class="input" name="password" type="password" autocomplete="current-password" required></div>
+          <div class="form-error"></div>
+          <button class="btn primary block" type="submit">Войти</button></form>`;
       el.innerHTML = `<div class="auth-wrap"><div class="card auth-card">${brandHtml(s)}
-        <div class="notice">${icon("gift")}<div>Приглашение в <b>«${esc(invite.tariff)}»</b>.${esc(days)}</div></div>
-        <h2>Регистрация</h2>
-        <div class="auth-steps">
-          ${step(1, st.verified, "Подтвердите Telegram", st.verified ? "" : s1)}
-          ${step(2, st.verified, "Введите код из бота", st.verified || !st.url ? "" : s2)}
-          ${step(3, false, "Придумайте логин и пароль", st.verified ? s3 : "")}
-        </div>
-        <p class="hint center m0">Уже есть аккаунт? <a href="#" class="link-btn" id="auth-switch">Войти</a></p>
+        ${notice ? `<div class="notice">${icon("warn")}<div>${esc(notice)}</div></div>` : ""}
+        ${inviteNote}
+        <h2>Вход в кабинет</h2>
+        ${st.password ? pw : tg}
+        ${hasBot ? `<p class="hint center auth-alt"><a href="#" class="link-btn" id="auth-mode">${st.password ? "Войти через Telegram" : "Вход по паролю (для администратора)"}</a></p>` : ""}
+        ${!invite && !st.password && st.step === "start" ? `<p class="hint center m0">Впервые здесь? Регистрация — по ссылке-приглашению от администратора.</p>` : ""}
       </div></div>`;
-      $("#auth-switch").onclick = (e) => { e.preventDefault(); showAuth("login", invite); };
-      $("#open-bot")?.addEventListener("click", () => setTimeout(() => $("#code-form [name=code]")?.focus(), 300));
-      $("#new-code")?.addEventListener("click", (e) => { e.preventDefault(); start(); });
+      $("#auth-mode")?.addEventListener("click", (e) => { e.preventDefault(); st.password = !st.password; stopAuthPoll(); draw(); if (!st.password && st.step === "code") poll(); });
+      $("#tg-retry")?.addEventListener("click", () => start());
+      $("#tg-new")?.addEventListener("click", (e) => { e.preventDefault(); start(); });
+      $("#tg-open")?.addEventListener("click", () => { st.step = "code"; draw(); poll(); });
       const cf = $("#code-form");
-      if (cf) App.onSubmit(cf, async (d) => {
-        const r = await App.post("/api/auth/tg/check", { token: st.token, code: d.code });
-        Object.assign(st, { verified: true, login: r.login || "" });
-        draw(); $("#reg-form [name=login]")?.focus();
-      });
-      const rf = $("#reg-form");
-      if (rf) App.onSubmit(rf, async (d) => {
-        if (d.password !== d.password2) throw new Error("Пароли не совпадают");
-        App.me = await App.post("/api/auth/register", { token: st.token, login: d.login, password: d.password });
-        location.hash = "#/";
-        await boot();
-      });
+      if (cf) {
+        App.onSubmit(cf, async (d) => {
+          App.me = await App.post("/api/auth/tg/verify", { token: st.token, code: d.code });
+          if (App.route().name === "join") location.hash = "#/";
+          await boot();
+        });
+        const inp = cf.elements.code;
+        inp.oninput = () => { inp.value = inp.value.replace(/\D/g, "").slice(0, 6); if (inp.value.length === 6) cf.requestSubmit(); };
+        inp.focus();
+      }
+      const f = $("#auth-form");
+      if (f) {
+        App.onSubmit(f, async (d) => {
+          App.me = await App.post("/api/auth/login", d);
+          if (invite) location.hash = `#/join/${invite.code}`;
+          await boot();
+        });
+        f.elements.login.focus();
+      }
     };
     const start = async () => {
-      Object.assign(st, { url: "", error: "" }); draw();
-      try { Object.assign(st, await App.post("/api/auth/tg/start", { invite: invite.code })); }
+      stopAuthPoll();
+      Object.assign(st, { token: "", url: "", step: "start", sent: false, error: "" }); draw();
+      try { Object.assign(st, await App.post("/api/auth/tg/start", invite ? { invite: invite.code } : {})); }
       catch (e) { st.error = e.message; }
       draw();
     };
-    start();
+    // Пока ждём код — показываем, прислал ли его бот или почему отказал
+    const poll = async () => {
+      stopAuthPoll();
+      if (!st.token || st.step !== "code" || st.password || $("#auth").hidden) return;
+      try {
+        const r = await App.post("/api/auth/tg/status", { token: st.token });
+        if (r.sent !== st.sent || r.error !== st.error) {
+          const code = $("#code-form [name=code]")?.value || "";
+          Object.assign(st, { sent: r.sent, error: r.error }); draw();
+          const inp = $("#code-form [name=code]"); if (inp) inp.value = code;
+        }
+        if (r.sent || r.error) return;
+      } catch (e) {
+        if (e.status === 410) { st.error = e.message; return draw(); }
+      }
+      authTimer = setTimeout(poll, 2500);
+    };
+    document.onvisibilitychange = () => { if (!document.hidden && st.step === "code" && !st.sent) poll(); };
+    if (hasBot) start(); else draw();
   }
+  App.showAuth = showAuth;
 
   async function boot() {
     const cfg = await App.get("/api/config");
@@ -459,13 +476,14 @@ window.App = (() => {
     if (!App.me) {
       const r = route();
       if (r.name === "join" && r.arg) {
-        try { const inv = await App.get(`/api/invite/${encodeURIComponent(r.arg)}`); return showAuth("register", { ...inv, code: r.arg }); }
+        try { const inv = await App.get(`/api/invite/${encodeURIComponent(r.arg)}`); return showAuth("login", { ...inv, code: r.arg }); }
         catch (e) { return showAuth("login", null, e.message); }
       }
       return showAuth();
     }
+    stopAuthPoll();
     $("#auth").hidden = true; $("#auth").innerHTML = "";
-    $("#layout").hidden = false; $("#fab").hidden = false;
+    $("#layout").hidden = false;
     renderShell();
     await render();
   }

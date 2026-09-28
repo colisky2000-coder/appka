@@ -491,7 +491,7 @@
             : "Пока не подключён (заглушка в backend/partner_api.py). Ссылки выдаются вручную в разделе «Ссылки»."}</span></div>
             ${o.partner_api ? `<button class="btn sm" id="sync">Синхронизировать статусы</button>` : App.badge("заглушка", "gray")}</div>
           <div class="setting"><div class="txt"><b>Telegram-бот</b><span class="muted">${o.telegram
-            ? "Токен задан. Бот присылает коды при регистрации и уведомления. На хостинге с HTTPS вебхук подключается сам при запуске; кнопка — подключить заново."
+            ? "Токен задан. Бот присылает коды для входа и уведомления. На хостинге с HTTPS вебхук подключается сам при запуске; кнопка — подключить заново."
             : "Не настроен: задайте TELEGRAM_BOT_TOKEN и TELEGRAM_BOT_USERNAME в .env. Без бота регистрация по приглашениям не работает."}</span></div>
             ${o.telegram ? `<button class="btn sm" id="hook">Подключить вебхук</button>` : App.badge("выключен", "gray")}</div>
         </div>`;
@@ -570,9 +570,9 @@
       <form id="ub"><b>Баланс: ${money(u.balance, 2)}</b>
         <div class="row mt"><input class="input flex1" name="amount" type="number" step="0.01" placeholder="+100 или -50" required><input class="input flex2" name="note" placeholder="Комментарий"><button class="btn" type="submit">Изменить</button></div>
         <div class="form-error"></div></form>
-      <hr>
-      <form id="up"><b>Новый пароль</b><p class="hint m0">Если человек забыл пароль — задайте новый и сообщите ему.</p><div class="row mt"><input class="input flex1" name="password" minlength="8" placeholder="Минимум 8 символов" required><button class="btn" type="submit">Установить</button></div>
-        <div class="form-error"></div></form>
+      ${u.role === "admin" ? `<hr>
+      <form id="up"><b>Новый пароль</b><p class="hint m0">Для входа по паролю. Остальные входят через Telegram по коду.</p><div class="row mt"><input class="input flex1" name="password" minlength="8" placeholder="Минимум 8 символов" required><button class="btn" type="submit">Установить</button></div>
+        <div class="form-error"></div></form>` : ""}
       ${u.sessions.length ? `<hr><b>Сессии</b>${u.sessions.map((s) => `<div class="hint">${esc(s.ip)} · ${fmtDateTime(s.last_active)}</div>`).join("")}` : ""}
       <hr><button class="btn sm danger" id="udel">${icon("trash")}Удалить пользователя</button>`,
     (m, close) => {
@@ -581,7 +581,7 @@
         App.toast("Сохранено"); close(); reload();
       });
       App.onSubmit($("#ub", m), async (d) => { await App.post(`/api/admin/users/${id}/balance`, d); App.toast("Баланс изменён"); close(); reload(); });
-      App.onSubmit($("#up", m), async (d, f) => { await App.post(`/api/admin/users/${id}/password`, d); f.reset(); App.toast("Пароль установлен, сессии пользователя завершены"); });
+      if ($("#up", m)) App.onSubmit($("#up", m), async (d, f) => { await App.post(`/api/admin/users/${id}/password`, d); f.reset(); App.toast("Пароль установлен, сессии пользователя завершены"); });
       $("#udel", m).onclick = async () => {
         if (!(await App.confirm(`Удалить ${u.login} вместе со всеми заявками, ссылками и покупками?`, "Удалить"))) return;
         try { await App.del(`/api/admin/users/${id}`); close(); App.toast("Удалено"); reload(); } catch (e) { App.fail(e); }

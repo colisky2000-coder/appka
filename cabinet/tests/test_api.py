@@ -26,7 +26,7 @@ def app(monkeypatch):
     from backend import auth, telegram
     auth._attempts.clear()
     SENT.clear()
-    monkeypatch.setattr(telegram, "send", lambda chat_id, text, html=False: SENT.append((str(chat_id), text)))
+    monkeypatch.setattr(telegram, "send", lambda chat_id, text, html=False, buttons=None: SENT.append((str(chat_id), text, buttons)))
     # TEST_DATABASE_URL=postgresql://... — прогнать тесты на Postgres
     url = os.environ.get("TEST_DATABASE_URL", "sqlite://")
     if url != "sqlite://":
@@ -74,29 +74,34 @@ def tg_message(app, tg_id, text, username="tester", first_name="Тест"):
 
 
 def last_code(tg_id):
-    for chat, text in reversed(SENT):
+    for chat, text, _ in reversed(SENT):
         m = re.search(r"<code>(\d{6})</code>", text)
         if chat == str(tg_id) and m:
             return m.group(1)
     return None
 
 
-def signup(app, invite, tg_id=555, username="tester"):
-    """Шаги 1–2 регистрации: ссылка на бота и «Запустить» в боте. Возвращает (клиент, токен)."""
+def tg_start(app, invite=None, tg_id=555, username="tester"):
+    """«Войти через Telegram» на сайте и «Запустить» в боте. Возвращает (клиент, токен)."""
     c = client(app)
-    r = post(c, "/api/auth/tg/start", {"invite": invite})
+    r = post(c, "/api/auth/tg/start", {"invite": invite} if invite else {})
     assert r.status_code == 200, r.json
     d = r.json["data"]
-    assert d["url"] == f"https://t.me/test_bot?start=reg_{d['token']}"
-    tg_message(app, tg_id, f"/start reg_{d['token']}", username)
+    assert d["url"] == f"https://t.me/test_bot?start=in_{d['token']}"
+    SENT.clear()
+    tg_message(app, tg_id, f"/start in_{d['token']}", username)
     return c, d["token"]
 
 
-def register(app, login_="user", password="userpass123", tg_id=555, invite=None, username="tester"):
-    c, token = signup(app, invite or make_invite(app), tg_id, username)
-    r = post(c, "/api/auth/tg/check", {"token": token, "code": last_code(tg_id)})
-    assert r.status_code == 200, r.json
-    r = post(c, "/api/auth/register", {"token": token, "login": login_, "password": password})
+def tg_login(app, invite=None, tg_id=555, username="tester"):
+    """Полный вход: код из бота вводится на сайте. Возвращает (клиент, ответ verify)."""
+    c, token = tg_start(app, invite, tg_id, username)
+    return c, post(c, "/api/auth/tg/verify", {"token": token, "code": last_code(tg_id) or "000000"})
+
+
+def register(app, login_="user", tg_id=555, invite=None, username=None):
+    """Новый пользователь по приглашению; логин = username из Telegram."""
+    c, r = tg_login(app, invite or make_invite(app), tg_id, username or login_)
     assert r.status_code == 200, r.json
     return c
 
@@ -104,59 +109,75 @@ def register(app, login_="user", password="userpass123", tg_id=555, invite=None,
 def test_auth_flow(app):
     c = client(app)
     assert c.get("/api/me").status_code == 401
-    # Без приглашения зарегистрироваться нельзя
-    assert post(c, "/api/auth/tg/start", {}).status_code == 404
     assert post(c, "/api/auth/tg/start", {"invite": "nope"}).status_code == 404
-    assert post(c, "/api/auth/register", {"login": "x", "password": "12345678"}).status_code == 400
+    assert post(c, "/api/auth/tg/status", {"token": "nope"}).status_code == 410
 
-    c, token = signup(app, make_invite(app), username="Tester")
+    # Новому человеку без приглашения бот код не присылает
+    c, token = tg_start(app, username="Tester")
+    assert last_code(555) is None and "приглашению" in SENT[-1][1]
+    st = post(c, "/api/auth/tg/status", {"token": token}).json["data"]
+    assert not st["sent"] and "приглашению" in st["error"]
+    assert post(c, "/api/auth/tg/verify", {"token": token, "code": "123456"}).status_code == 400
+
+    # По приглашению — код из бота, аккаунт создаётся сам, без паролей
+    c, token = tg_start(app, make_invite(app), username="Tester")
+    assert post(c, "/api/auth/tg/status", {"token": token}).json["data"] == {"sent": True, "error": ""}
     code = last_code(555)
-    assert code and len(code) == 6
-    # Пока код не введён, логин и пароль задать нельзя
-    assert post(c, "/api/auth/register", {"token": token, "login": "user", "password": "userpass123"}).status_code == 400
-    assert post(c, "/api/auth/tg/check", {"token": token, "code": "000000" if code != "000000" else "111111"}).status_code == 400
-    r = post(c, "/api/auth/tg/check", {"token": token, "code": code})
-    assert r.status_code == 200 and r.json["data"]["login"] == "tester"  # логин по умолчанию — username
-    assert post(c, "/api/auth/register", {"token": token, "login": "Плохой логин", "password": "userpass123"}).status_code == 400
-    assert post(c, "/api/auth/register", {"token": token, "login": "admin@test.ru", "password": "userpass123"}).status_code == 400
-    assert post(c, "/api/auth/register", {"token": token, "login": "user", "password": "short"}).status_code == 400
-    r = post(c, "/api/auth/register", {"token": token, "login": "@User", "password": "userpass123"})
+    assert post(c, "/api/auth/tg/verify", {"token": token, "code": "000000" if code != "000000" else "111111"}).status_code == 400
+    r = post(c, "/api/auth/tg/verify", {"token": token, "code": code})
     assert r.status_code == 200, r.json
     me = c.get("/api/me").json["data"]
-    assert me["login"] == "user" and me["username"] == "Tester" and me["role"] == "user"
+    assert me["login"] == "tester" and me["username"] == "Tester" and me["role"] == "user"
     assert me["tariff"]["code"] == "basic" and me["telegram_linked"] and me["display_name"] == "Тест"
-    # Токен одноразовый
-    assert post(client(app), "/api/auth/register", {"token": token, "login": "user2", "password": "userpass123"}).status_code == 400
-    # Тот же Telegram второй раз не регистрируется: бот не присылает код
-    c2, token2 = signup(app, make_invite(app))
-    assert "уже зарегистрирован" in SENT[-1][1]
-    assert post(c2, "/api/auth/tg/check", {"token": token2, "code": "123456"}).status_code == 400
+    # Код одноразовый
+    assert post(client(app), "/api/auth/tg/verify", {"token": token, "code": code}).status_code == 410
+
+    # Повторный вход — тот же аккаунт, приглашение не нужно
+    _, r = tg_login(app, username="Tester")
+    assert r.status_code == 200 and r.json["data"]["id"] == me["id"]
+
+    # Код, полученный одним Telegram, работает только для своей ссылки
+    c3, token3 = tg_start(app, tg_id=555)
+    c4, token4 = tg_start(app, make_invite(app), tg_id=556, username="other")
+    assert post(c4, "/api/auth/tg/verify", {"token": token4, "code": last_code(555) or "1"}).status_code == 400
+
+    # Новичок без username получает логин tg<id>
+    _, r = tg_login(app, make_invite(app), tg_id=4242, username="")
+    assert r.json["data"]["login"] == "tg4242"
+
     # CSRF: без заголовка изменяющий запрос отклоняется
     assert c.post("/api/auth/logout").status_code == 400
     assert post(c, "/api/auth/logout").status_code == 200
     assert c.get("/api/me").status_code == 401
-    # Вход — по логину и паролю
-    assert post(client(app), "/api/auth/login", {"login": "user", "password": "wrong"}).status_code == 401
-    login(app, "@USER", "userpass123")
+    # Вход по паролю остался для администратора
+    assert post(client(app), "/api/auth/login", {"login": "admin@test.ru", "password": "wrong"}).status_code == 401
+    admin_client(app)
 
 
 def test_code_attempts_limited(app):
-    c, token = signup(app, make_invite(app))
+    c, token = tg_start(app, make_invite(app))
     code = last_code(555)
     wrong = "000000" if code != "000000" else "111111"
     for _ in range(5):
-        assert post(c, "/api/auth/tg/check", {"token": token, "code": wrong}).status_code == 400
-    assert post(c, "/api/auth/tg/check", {"token": token, "code": code}).status_code == 429
-    # Новая ссылка на бота — новый код
-    c, token = signup(app, make_invite(app))
-    assert post(c, "/api/auth/tg/check", {"token": token, "code": last_code(555)}).status_code == 200
+        assert post(c, "/api/auth/tg/verify", {"token": token, "code": wrong}).status_code == 400
+    assert post(c, "/api/auth/tg/verify", {"token": token, "code": code}).status_code == 429
+
+
+def test_invite_moves_existing_user_to_its_tariff(app):
+    register(app)
+    admin = admin_client(app)
+    tariffs = admin.get("/api/admin/r/tariffs").json["data"]
+    other = next(t for t in tariffs if not t["is_default"])
+    inv = post(admin, "/api/admin/invites", {"tariff_id": other["id"]}).json["data"]["code"]
+    _, r = tg_login(app, inv, username="user")
+    assert r.status_code == 200 and r.json["data"]["tariff"]["id"] == other["id"]
 
 
 def test_invites(app):
     admin = admin_client(app)
     one = make_invite(app, max_uses=1, days=10, title="Поток 1")
     register(app, invite=one)
-    me = login(app, "user", "userpass123").get("/api/me").json["data"]
+    me = tg_login(app, username="user")[0].get("/api/me").json["data"]
     assert me["tariff_until"]  # доступ на 10 дней
     # Лимит исчерпан
     assert post(client(app), "/api/auth/tg/start", {"invite": one}).status_code == 404
@@ -175,7 +196,7 @@ def test_invites(app):
     # Удаление ссылки не трогает пользователей
     assert admin.delete(f"/api/admin/invites/{inv['id']}", headers=H).status_code == 200
     assert admin.get(f"/api/admin/users?invite={inv['id']}").json["data"] == []
-    assert login(app, "user", "userpass123").get("/api/me").status_code == 200
+    assert tg_login(app, username="user")[0].get("/api/me").status_code == 200
 
 
 def test_old_tariff_invite_is_migrated(app):
@@ -200,9 +221,9 @@ def test_telegram_link_for_old_account(app):
     me = admin.get("/api/me").json["data"]
     assert me["telegram_linked"] and me["username"] == "boss"
     assert "привязан" in SENT[-1][1]
-    # Этот Telegram уже занят — зарегистрировать им новый аккаунт нельзя
-    signup(app, make_invite(app), tg_id=777)
-    assert "уже зарегистрирован" in SENT[-1][1]
+    # Теперь админ входит и через Telegram
+    _, r = tg_login(app, tg_id=777, username="boss")
+    assert r.status_code == 200 and r.json["data"]["role"] == "admin"
     # Сообщение без ссылки — подсказка
     tg_message(app, 999, "привет")
     assert "по ссылке-приглашению" in SENT[-1][1]
@@ -218,14 +239,14 @@ def test_webhook_secret(app, monkeypatch):
 
 
 def test_password_change_and_sessions(app):
-    c1 = register(app)
-    c2 = login(app, "user", "userpass123")
+    c1 = admin_client(app)
+    c2 = admin_client(app)
     assert len(c1.get("/api/me/sessions").json["data"]) == 2
-    r = post(c1, "/api/auth/password", {"current": "userpass123", "password": "newpass12345"})
+    r = post(c1, "/api/auth/password", {"current": "adminpass123", "password": "newpass12345"})
     assert r.status_code == 200
     assert c2.get("/api/me").status_code == 401  # другие сессии завершены
     assert c1.get("/api/me").status_code == 200
-    login(app, "user", "newpass12345")
+    login(app, "admin@test.ru", "newpass12345")
 
 
 def test_non_admin_blocked_from_admin(app):
@@ -410,6 +431,7 @@ def test_block_user(app):
     uid = admin.get("/api/admin/users?q=user").json["data"][0]["id"]
     admin.patch(f"/api/admin/users/{uid}", json={"is_blocked": True}, headers=H)
     assert u.get("/api/me").status_code == 401
-    assert post(client(app), "/api/auth/login", {"login": "user", "password": "userpass123"}).status_code == 403
+    c, token = tg_start(app, username="user")
+    assert last_code(555) is None and "заблокирован" in SENT[-1][1]
     me = admin.get("/api/me").json["data"]["id"]
     assert admin.patch(f"/api/admin/users/{me}", json={"role": "user"}, headers=H).status_code == 400

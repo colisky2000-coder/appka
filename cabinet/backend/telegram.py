@@ -34,21 +34,27 @@ def call(method, payload, timeout=10):
         return json.loads(r.read().decode())
 
 
-def send(chat_id, text, html=False):
-    """Отправка в фоне, чтобы не тормозить ответ API. html=True — разметка <b>, <code>."""
+def _bg(method, payload):
+    """Запрос к Telegram в фоне, чтобы не тормозить ответ API и бота."""
+    def run():
+        try:
+            call(method, payload)
+        except Exception as e:  # сеть/блокировка бота — не критично
+            log.warning("telegram %s failed: %s", method, e)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
+def send(chat_id, text, html=False, buttons=None):
+    """html=True — разметка <b>, <code>; buttons — строки инлайн-кнопок [[{text, callback_data | url}]]."""
     if not enabled() or not chat_id:
         return
     payload = {"chat_id": chat_id, "text": text, "disable_web_page_preview": True}
     if html:
         payload["parse_mode"] = "HTML"
-
-    def run():
-        try:
-            call("sendMessage", payload)
-        except Exception as e:  # сеть/блокировка бота — не критично
-            log.warning("telegram send failed: %s", e)
-
-    threading.Thread(target=run, daemon=True).start()
+    if buttons:
+        payload["reply_markup"] = {"inline_keyboard": buttons}
+    _bg("sendMessage", payload)
 
 
 def notify_user(user, text):

@@ -101,7 +101,8 @@ class Invite(Base):
 
 
 class TgSignup(Base):
-    """Регистрация: код из Telegram-бота подтверждает, что человек владеет аккаунтом Telegram."""
+    """Запрос входа через Telegram: сайт ждёт, пока человек подтвердит вход кнопкой в боте.
+    invite_id = 0 — вход без приглашения (только для уже зарегистрированных)."""
     __tablename__ = "tg_signups"
     id: Mapped[int] = mapped_column(primary_key=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
@@ -112,6 +113,8 @@ class TgSignup(Base):
     tg_name: Mapped[str] = mapped_column(String(120), default="")
     code_hash: Mapped[str] = mapped_column(String(64), default="")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
+    user_id: Mapped[int] = mapped_column(Integer, default=0)       # кто подтвердил вход
+    error: Mapped[str] = mapped_column(String(300), default="")    # почему вход не удался (показываем на сайте)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     used: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

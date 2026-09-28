@@ -178,7 +178,7 @@
         ${s.description ? `<div class="prose muted">${md(s.description)}</div>` : ""}
         ${s.target && !(s.id === d.current_step_id && lessonOf(s)) ? `<button class="btn accent-o sm" data-open="${s.id}">${icon("arrow")}${esc(targetLabel(s.target))}</button>` : ""}
         <div class="tasks">${s.tasks.length ? s.tasks.map((t) => taskHtml("data-task", t.id, t.text, t.done)).join("")
-          : s.target?.type === "lesson" ? `<p class="hint m0">Шаг отметится сам, когда вы нажмёте «Урок пройден» в уроке.</p>${taskHtml("data-stepdone", s.id, "Шаг выполнен", s.done)}`
+          : s.target?.type === "lesson" ? `${s.id === d.current_step_id ? "" : `<p class="hint m0">Шаг отметится сам, когда вы нажмёте «Урок пройден» в уроке.</p>`}${taskHtml("data-stepdone", s.id, "Шаг выполнен", s.done)}`
           : taskHtml("data-stepdone", s.id, "Шаг выполнен", s.done)}</div>`;
       const draw = () => {
         const pr = d.progress, pct = pr.steps_total ? Math.round((pr.steps_done / pr.steps_total) * 100) : 0;
@@ -255,7 +255,9 @@
           ro?.disconnect();
           ro = new ResizeObserver(() => { if (rm.isConnected) fill.style.height = place() + "px"; });
           ro.observe(rm);
-          if (first) $(".rm-item.current", rm)?.scrollIntoView({ block: "center", behavior: "smooth" });
+          // текущий шаг ниже экрана — плавно докручиваем к нему
+          const curEl = first && $(".rm-item.current", rm);
+          if (curEl && curEl.getBoundingClientRect().top > innerHeight * 0.6) curEl.scrollIntoView({ block: "center", behavior: "smooth" });
         }
         first = false;
 
@@ -319,10 +321,10 @@
         ${l.todo.length ? `<div class="card"><div class="card-title">${icon("check")}Что сделать после урока</div>
           <div class="tasks">${l.todo.map((t) => taskHtml("data-task", t.id, t.text, t.done)).join("")}</div></div>` : ""}
         <div class="lesson-nav">
-          ${l.prev_id ? `<a class="btn ghost" href="#/lesson/${l.prev_id}">${icon("back")}Предыдущий</a>` : "<span></span>"}
-          <div class="row">${l.done ? `<button class="btn sm ghost" id="undone">Снять отметку</button>` : ""}
-            ${l.done ? (l.next_id ? `<a class="btn primary" href="#/lesson/${l.next_id}">Следующий урок${icon("arrow")}</a>` : `<a class="btn primary" href="#/learn">К роадмапу${icon("arrow")}</a>`)
-              : `<button class="btn primary" id="done">${icon("check")}Урок пройден${l.next_id ? " → дальше" : ""}</button>`}</div>
+          <a class="btn ghost" href="#/lessons">${icon("list")}В список уроков</a>
+          <div class="row">${l.done ? `<button class="btn sm ghost" id="undone">Снять отметку</button>
+              <a class="btn primary" href="#/learn">К роадмапу${icon("arrow")}</a>`
+            : `<button class="btn primary" id="done">${icon("check")}Урок пройден</button>`}</div>
         </div>`;
     },
     mount(el) {
@@ -338,7 +340,7 @@
         try {
           await App.post(`/api/lessons/${l.id}/done`, { done: true });
           App.toast("Урок пройден");
-          location.hash = l.next_id ? `#/lesson/${l.next_id}` : "#/learn";
+          location.hash = "#/learn";
         } catch (e) { App.fail(e); }
       });
       $("#undone", el)?.addEventListener("click", async () => { await App.post(`/api/lessons/${l.id}/done`, { done: false }).catch(App.fail); App.rerender(); });
@@ -728,7 +730,8 @@
         <label class="switch"><input type="checkbox" data-set="${key}" ${me[key] ? "checked" : ""}><span></span></label></div>`;
       el.innerHTML = `${App.pageHead("user", "Мой профиль", "Личные данные и настройки")}
         <form class="card" id="pf">
-          <div class="field"><label>Логин для входа</label><input class="input" value="${esc(me.login)}" disabled></div>
+          <div class="field"><label>Логин</label><input class="input" value="${esc(me.login)}" disabled>
+            ${me.role === "admin" ? "" : `<span class="hint">Входите через Telegram: бот присылает код.</span>`}</div>
           <div class="field"><label>Отображаемое имя</label><input class="input" name="display_name" value="${esc(me.display_name)}" maxlength="120" placeholder="Как вас показывать в кабинете"></div>
           <div class="form-error"></div>
           <button class="btn" type="submit">${icon("check")}Сохранить</button>
@@ -765,6 +768,7 @@
   }
 
   P.password = {
+    admin: true, // остальные входят через Telegram, пароль им не нужен
     crumbs: ["Смена пароля"],
     async render(el) {
       el.innerHTML = `<form class="card narrow" id="pw">

@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend import media  # noqa: E402
 from test_api import H, app, client, login, post, register  # noqa: E402,F401
-from test_api import SENT, last_code, make_invite, signup  # noqa: E402,F401
+from test_api import SENT, make_invite  # noqa: E402,F401
 
 PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 
@@ -263,3 +263,14 @@ def test_works_under_url_prefix(app, monkeypatch):
     assert r.headers["X-Robots-Tag"] == "noindex, nofollow"
     # Passenger с PassengerBaseURI сам передаёт подпапку в SCRIPT_NAME — так тоже работает
     assert c.get("/api/config", environ_overrides={"SCRIPT_NAME": "/secretpath"}).status_code == 200
+
+
+def test_rich_text_image_size_and_note():
+    from backend.richtext import sanitize
+    out = sanitize('<img src="media/u/abc" data-w="45" data-align="left" style="position:fixed" onclick="x()">'
+                   '<figure class="image" data-w="500" data-align="evil"><img src="media/u/b"><figcaption>Подпись</figcaption></figure>'
+                   '<aside><b>Важно</b></aside>')
+    assert '<img src="media/u/abc" alt="" loading="lazy" data-w="45" style="width:45%" data-align="left">' in out
+    assert "position" not in out and "onclick" not in out
+    assert '<figure class="image"><img src="media/u/b"' in out  # неверные размер и выравнивание отброшены
+    assert "<aside><b>Важно</b></aside>" in out

@@ -10,7 +10,7 @@ from html.parser import HTMLParser
 
 MAX_LEN = 300_000
 
-TAGS = {"p", "br", "h2", "h3", "h4", "b", "i", "u", "s", "ul", "ol", "li", "blockquote",
+TAGS = {"p", "br", "h2", "h3", "h4", "b", "i", "u", "s", "ul", "ol", "li", "blockquote", "aside",
         "a", "img", "hr", "figure", "figcaption", "pre", "code", "iframe"}
 VOID = {"br", "img", "hr"}
 RENAME = {"strong": "b", "em": "i", "strike": "s", "del": "s", "h1": "h2", "h5": "h4", "h6": "h4", "div": "p"}
@@ -18,13 +18,26 @@ RENAME = {"strong": "b", "em": "i", "strike": "s", "del": "s", "h1": "h2", "h5":
 DROP = {"script", "style", "template", "noscript", "head", "title", "object", "embed", "svg", "math",
         "form", "textarea", "select", "button", "iframe", "video", "audio", "canvas", "frame", "frameset"}
 # Блоки, внутри которых не может быть <p>: открытие нового блока закрывает незакрытый <p>
-BLOCKS = {"p", "h2", "h3", "h4", "ul", "ol", "blockquote", "figure", "pre", "hr"}
+BLOCKS = {"p", "h2", "h3", "h4", "ul", "ol", "blockquote", "aside", "figure", "pre", "hr"}
 FIGURE_CLASSES = {"image", "embed"}
 # Разрешённые плееры для встраивания видео
 EMBED_RE = re.compile(r"^https://(www\.youtube\.com/embed/|rutube\.ru/play/embed/|vk\.com/video_ext\.php\?|"
                       r"player\.vimeo\.com/video/|dzen\.ru/embed/)[^\s\"'<>]*$")
 IMG_RE = re.compile(r"^(https?://[^\s\"'<>]+|media/u/[A-Za-z0-9]+)$")
+ALIGNS = {"left", "center", "right"}
 HREF_RE = re.compile(r"^(https?://|mailto:|tel:|#)[^\s\"'<>]*$", re.I)
+
+
+def media_attrs(a):
+    """Размер (data-w, % ширины текста) и выравнивание картинки из редактора."""
+    out = ""
+    w = a.get("data-w", "").strip()
+    if w.isdigit() and 10 <= int(w) <= 100:
+        out += f' data-w="{int(w)}" style="width:{int(w)}%"'
+    align = a.get("data-align", "").strip()
+    if align in ALIGNS:
+        out += f' data-align="{align}"'
+    return out
 
 
 def is_html(text):
@@ -91,11 +104,11 @@ class _Cleaner(HTMLParser):
             src = a.get("src", "").strip()
             if not IMG_RE.match(src):
                 return
-            extra = f' src="{escape(src)}" alt="{escape(a.get("alt", "")[:300])}" loading="lazy"'
+            extra = f' src="{escape(src)}" alt="{escape(a.get("alt", "")[:300])}" loading="lazy"' + media_attrs(a)
         elif tag == "figure":
             cls = a.get("class", "").strip()
             if cls in FIGURE_CLASSES:
-                extra = f' class="{cls}"'
+                extra = f' class="{cls}"' + (media_attrs(a) if cls == "image" else "")
         self._open(tag, extra)
 
     def handle_startendtag(self, tag, attrs):

@@ -14,14 +14,14 @@ from .auth import (
 )
 from .db import db, utcnow
 from .models import (
-    CONVERSION_STATUSES, Article, ArticleProgram, BalanceTx, Click, Conversion, Favorite, Invite, Lesson, LessonDone,
+    CONVERSION_STATUSES, Article, ArticleProgram, BalanceTx, Click, Conversion, Favorite, Lesson, LessonDone,
     Material, MaterialProgram, News, NewsRead, Offer, OfferLink, Program, Step, StepDone, StepTask,
     Tariff, TaskDone, TeamMember, Ticket, TicketMessage, TopUpRequest, User, UserSession,
 )
 from .services import (
-    change_balance, clean_login, create_conversion, default_tariff, get_invite, invite_usable, issue_link,
+    change_balance, create_conversion, get_invite, issue_link,
     link_counts, money_summary, norm_login, payout_for, public_name, ser_conversion, ser_link, ser_tariff,
-    ser_user, suggest_login, top_participants, use_invite,
+    ser_user, top_participants, use_invite,
 )
 from .util import ApiError, clean_inn, clean_str, iso, new_code, ok, parse_date, rub, to_kop
 
@@ -40,49 +40,38 @@ def config():
                "telegram_bot": telegram.bot_username() if telegram.enabled() else ""})
 
 
-# Регистрация: ссылка-приглашение -> код из Telegram-бота -> логин и пароль
+# Вход через Telegram: сайт получает ссылку на бота, бот присылает код, человек вводит его на сайте.
+# Новичок входит только по приглашению (invite) — бот создаёт аккаунт с тарифом ссылки.
 @bp.post("/auth/tg/start")
-def signup_start():
+def tg_login_start():
     if not telegram.enabled() or not telegram.bot_username():
-        raise ApiError("Регистрация временно недоступна: не настроен Telegram-бот. Сообщите администратору", 503)
-    inv = get_invite(body().get("invite"))
-    check_rate("signup:" + client_ip(), limit=30)
-    token = bot.new_signup(inv)
+        raise ApiError("Вход через Telegram временно недоступен: не настроен бот. Сообщите администратору", 503)
+    code = body().get("invite")
+    inv = get_invite(code) if code else None
+    check_rate("tglogin:" + client_ip(), limit=40)
+    token = bot.new_login(inv)
     db.commit()
-    return ok({"token": token, "bot": telegram.bot_username(),
-               "url": f"https://t.me/{telegram.bot_username()}?start={bot.PREFIX}{token}"})
+    return ok({"token": token, "url": f"https://t.me/{telegram.bot_username()}?start={bot.PREFIX}{token}"})
 
 
-@bp.post("/auth/tg/check")
-def signup_check():
+@bp.post("/auth/tg/status")
+def tg_login_status():
+    """Сайт ждёт кода: пишем «код отправлен» или почему бот отказал."""
+    rec = bot.get_login(body().get("token"))
+    return ok({"sent": bool(rec.code_hash), "error": rec.error})
+
+
+@bp.post("/auth/tg/verify")
+def tg_login_verify():
     d = body()
     check_rate("code:" + client_ip(), limit=30)
-    rec = bot.get_signup(d.get("token"))
+    rec = bot.get_login(d.get("token"))
     bot.check_code(rec, d["token"], d.get("code"))
-    return ok({"login": suggest_login(rec.tg_username), "username": rec.tg_username, "name": rec.tg_name})
-
-
-@bp.post("/auth/register")
-def register():
-    d = body()
-    rec = bot.get_signup(d.get("token"))
-    if not rec.verified:
-        raise ApiError("Сначала подтвердите Telegram кодом из бота")
-    inv = db.get(Invite, rec.invite_id)
-    if not invite_usable(inv):
-        raise ApiError("Ссылка-приглашение больше не действует. Попросите у администратора новую")
-    if db.query(User).filter_by(tg_id=rec.tg_id).first():
-        raise ApiError("Этот Telegram уже зарегистрирован — войдите по логину и паролю")
-    login = clean_login(d.get("login"))
-    validate_password(d.get("password"))
-    t = default_tariff()
-    u = User(login=login, password_hash=hash_password(d["password"]), username=rec.tg_username,
-             display_name=rec.tg_name, tg_id=rec.tg_id, chat_id=rec.chat_id,
-             tariff_id=t.id if t else None, links_access=settings.get_bool("default_links_access"))
-    use_invite(u, inv)
+    u, err = bot.confirm_login(rec)
+    if not u:
+        db.rollback()
+        raise ApiError(err, 403)
     rec.used = True
-    db.add(u)
-    db.flush()
     token = start_session(u)
     db.commit()
     return set_cookie(make_response(ok(ser_user(u))), token)
