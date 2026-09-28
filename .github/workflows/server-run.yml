@@ -23,7 +23,7 @@ jobs:
       SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
       SSHPASS: ${{ secrets.SERVER_PASSWORD }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: SSH
         run: bash .github/scripts/ssh-setup.sh
