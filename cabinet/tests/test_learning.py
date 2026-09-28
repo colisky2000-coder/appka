@@ -198,6 +198,15 @@ def test_media_helpers():
     assert media.video_embed("https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=5").startswith("https://www.youtube.com/embed/dQw4w9WgXcQ")
     assert media.video_embed("https://vkvideo.ru/video-12345_678901") == "https://vk.com/video_ext.php?oid=-12345&id=678901&hd=2&autoplay=1"
     assert media.video_embed("https://example.com/video.mp4") is None
+    # видео «по ссылке»: ключ доступа не теряется
+    rid = "0123456789abcdef0123456789abcdef"
+    assert media.video_embed(f"https://rutube.ru/video/private/{rid}/?r=wd&p=AbC-12_x") == \
+        f"https://rutube.ru/play/embed/{rid}?autoplay=1&p=AbC-12_x"
+    assert media.video_embed(f"https://rutube.ru/video/private/{rid}/?p=AbC", autoplay=False) == \
+        f"https://rutube.ru/play/embed/{rid}?p=AbC"
+    assert media.video_embed('<iframe src="https://vk.com/video_ext.php?oid=-1&amp;id=2&amp;hash=ff00"></iframe>') == \
+        "https://vk.com/video_ext.php?oid=-1&id=2&hash=ff00"
+    assert media.video_embed("https://vk.com/video-1_2?hash=ab12").endswith("&hash=ab12")
     assert media.find_preview_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ") == "https://img.youtube.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
     with pytest.raises(media.ApiError):
         media.fetch("http://127.0.0.1/secret", 100)

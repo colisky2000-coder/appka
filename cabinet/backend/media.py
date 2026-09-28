@@ -136,15 +136,21 @@ def _embed(url):
     if not url:
         return None
     u = url.strip()
+    m = re.search(r"""<iframe[^>]*\ssrc=["']([^"']+)""", u, re.I)  # вставили код встраивания целиком
+    if m:
+        u = unescape(m.group(1))
     yid = youtube_id(u)
     if yid:
         return f"https://www.youtube.com/embed/{yid}?autoplay=1&rel=0"
     m = re.search(r"rutube\.ru/(?:video|shorts|play/embed)/(?:private/)?([0-9a-f]{32})", u)
     if m:
-        return f"https://rutube.ru/play/embed/{m.group(1)}?autoplay=1"
+        key = _query_param(u, "p")  # ключ доступа у видео «по ссылке», без него плеер пишет «недоступно»
+        return f"https://rutube.ru/play/embed/{m.group(1)}?autoplay=1" + (f"&p={key}" if key else "")
     m = re.search(r"(?:vk\.com|vkvideo\.ru|vk\.ru)/(?:video|clip)(-?\d+)_(\d+)", u)
     if m:
-        return f"https://vk.com/video_ext.php?oid={m.group(1)}&id={m.group(2)}&hd=2&autoplay=1"
+        key = _query_param(u, "hash")  # у закрытых видео VK плеер открывается только с hash из кода встраивания
+        return (f"https://vk.com/video_ext.php?oid={m.group(1)}&id={m.group(2)}&hd=2&autoplay=1"
+                + (f"&hash={key}" if key else ""))
     if "video_ext.php" in u or "/embed/" in u or "player.vimeo.com" in u:
         return u
     m = re.search(r"vimeo\.com/(\d+)", u)
@@ -154,6 +160,11 @@ def _embed(url):
     if m:
         return f"https://dzen.ru/embed/{m.group(1)}"
     return None
+
+
+def _query_param(url, name):
+    val = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query).get(name, [""])[0]
+    return urllib.parse.quote(val, safe="") if val else ""
 
 
 # ---------- превью у записей (CoverMixin) ----------
