@@ -1,0 +1,20 @@
+[Unit]
+Description=appka — Telegram Mini App (Flask + React)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=appka
+Group=appka
+WorkingDirectory=/opt/appka/current
+# Значения по умолчанию; переопределяются в /etc/appka/appka.env
+Environment=HOST=127.0.0.1
+Environment=PORT=5000
+EnvironmentFile=-/etc/appka/appka.env
+ExecStart=/opt/appka/venv/bin/gunicorn server:app --bind ${HOST}:${PORT} --workers 1 --timeout 60
+Restart=always
+RestartSec=3
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

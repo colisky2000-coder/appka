@@ -1,0 +1,32 @@
+# Выполняет ops/run.sh на сервере по SSH, вывод — в логах этого workflow.
+# Запуск: изменить ops/run.sh и запушить в ветку claude/** (или вручную: Actions → Run workflow).
+name: Сервер — выполнить ops/run.sh
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['claude/**']
+    paths: ['ops/run.sh']
+
+concurrency:
+  group: server
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT }}
+      SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+      SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: SSH
+        run: bash .github/scripts/ssh-setup.sh
+
+      - name: ops/run.sh на сервере
+        run: srv 'bash -s' < ops/run.sh

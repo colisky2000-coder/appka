@@ -1,0 +1,60 @@
+# Деплой на сервер при каждом пуше в main (или вручную: Actions → Run workflow).
+# Фронтенд собирается здесь, на сервер уходит готовый релиз в /opt/appka/releases/<commit>,
+# дальше deploy/remote-deploy.sh ставит зависимости, перезапускает сервис и откатывает при ошибке.
+name: Деплой на сервер
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: server
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SERVER_HOST: ${{ secrets.SERVER_HOST }}
+      SERVER_USER: ${{ secrets.SERVER_USER }}
+      SERVER_PORT: ${{ secrets.SERVER_PORT }}
+      SERVER_SSH_KEY: ${{ secrets.SERVER_SSH_KEY }}
+      SSHPASS: ${{ secrets.SERVER_PASSWORD }}
+      RELEASE_DIR: /opt/appka/releases/${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Сборка фронтенда
+        run: cd frontend && npm install --no-audit --no-fund && npm run build
+
+      - name: Упаковка релиза
+        run: tar czf "$RUNNER_TEMP/release.tgz" server.py requirements.txt frontend/dist deploy
+
+      - name: SSH
+        run: bash .github/scripts/ssh-setup.sh
+
+      - name: Загрузка релиза на сервер
+        run: srv "mkdir -p '$RELEASE_DIR' && tar xzf - -C '$RELEASE_DIR'" < "$RUNNER_TEMP/release.tgz"
+
+      - name: Переменные приложения
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_CREDENTIALS_BASE64: ${{ secrets.GOOGLE_CREDENTIALS_BASE64 }}
+        run: |
+          # Заданные секреты записываются в /etc/appka/appka.env на сервере; незаданные не трогаются.
+          umask 077
+          for k in BOT_TOKEN SPREADSHEET_ID GOOGLE_CREDENTIALS_BASE64; do
+            if [ -n "${!k}" ]; then printf '%s=%s\n' "$k" "${!k}"; fi
+          done > "$RUNNER_TEMP/app.env"
+          srv "bash '$RELEASE_DIR/deploy/remote-deploy.sh' env" < "$RUNNER_TEMP/app.env"
+          rm -f "$RUNNER_TEMP/app.env"
+
+      - name: Установка и перезапуск
+        run: srv "bash '$RELEASE_DIR/deploy/remote-deploy.sh' release '$RELEASE_DIR'"
